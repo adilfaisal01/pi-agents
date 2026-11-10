@@ -49,6 +49,30 @@ PIN=$(git rev-parse HEAD)
 The commit message states the rows. A test commit that does not name rows is not a
 freeze, it is a pile of tests.
 
+## The scripted barrier
+
+Steps 0–3 are `wave.sh freeze`, and it refuses rather than warns at each of them:
+
+```bash
+./gate/wave.sh freeze --ledger ledger.md --level L3 --base <C0> --root <wave-root>
+```
+
+| wall | refusal |
+| --- | --- |
+| every lane at the level finished ok | `lane R2 did not finish ok: …` |
+| no two lanes claim one path | `two lanes claim the same path` — the merge is a human decision, so it never reaches a merge |
+| the composed tree is exactly the union of the scoped paths | `the composed tree is not the union of the lanes' scoped paths` |
+| the composed suite is RED at C0 | `the composed suite is GREEN at <C0> — every new test must be red there` |
+| the composed suite collects cleanly | `the composed suite does not collect cleanly` |
+
+On success it commits the lock surface with a message naming the rows, appends a
+`frozen` record per row (`docs/06`), and prints the pin sha as its **last line** so the
+next stage can take it directly:
+
+```bash
+PIN=$(./gate/wave.sh freeze ... | tail -1)
+```
+
 ## The gate
 
 ```bash

@@ -35,6 +35,33 @@ the documents yet — read it as a known gap, not as a plan.
     what a stranger has), and the user configures via layered override files
     (`~/.pi/agent/agent-modes.json`, `<repo>/.pi/agent-modes.json`) rather than editing a
     file inside the package, which `pi update` would overwrite.
+12. **The barrier is scripted, and every wall is a refusal.** `gate/wave.sh freeze`
+    composes the lanes, requires the whole suite RED at the pre-implementation commit,
+    requires a clean collect, refuses two lanes claiming one path before applying
+    anything, commits the lock surface with a message naming the rows, and prints the pin
+    as its last line. `gate/wave.sh build` then runs one lane per row at the pin and the
+    composed gate once, serially. Neither is a model's judgement call. (`docs/04`,
+    `docs/05`)
+13. **A build lane's own check is scoped to its row.** Every lane starts at the pin,
+    where all rows' tests exist and the ones it does not own are still red, so a lane
+    cannot be green on the whole suite. The lane runs `run-tests.sh -k "<the row's
+    tests>"`; the composed gate runs everything with no selection. Green per lane means
+    "this row is satisfied in isolation", never the delivery claim. (`docs/02`, `docs/05`)
+14. **The row carries its write scope.** The ledger's `sources` column is the plan →
+    build contract: plan fills it, the lane is refused writes outside it, and an empty
+    cell is a row nobody scoped (refused, not "anything"). Naming the lock surface in
+    `sources` is a refusal too. (`docs/05`, `docs/06`)
+15. **Spawning requires the human's confirmation.** `sysdv` and `build` refuse to run
+    without `--confirm`, and `plan` authors `ledger.md` in the docs/06 schema as its
+    artifact instead of describing a plan in prose. The confirmation is the acknowledgment
+    that someone read the rows; it is not a click-through. (`docs/01`)
+16. **The record trail is append-only.** Each stage appends one JSON object per row to
+    `<ledger dir>/records.jsonl` (single writer per stage, append mode, never rewritten):
+    `red_recorded` → `frozen` → `built_green` → `gate_green`, or `refused` with a reason.
+    The latest line per id is the current state; every earlier line is the audit trail;
+    a malformed line is skipped and counted. The trail does **not** carry the verdict —
+    `proved` / `conditional` / `structural` / `declared` stays a judgement in the ledger,
+    and the trail is what that judgement cites. (`docs/06`)
 
 ## Open
 
@@ -42,13 +69,15 @@ the documents yet — read it as a known gap, not as a plan.
    revert them (`git checkout -- <paths>`) or only report? *Current lean: report only.* A
    run that regenerates goldens on purpose would be silently undone, and the report is
    what makes the human decide.
-2. **Who certifies the barrier mechanically?** The composed-red run and the pin check are
-   scriptable; "are these the right tests" is not. *Current lean: scripts certify, the
-   human judges, no agent certifies.*
-3. **Do build lanes get a subagent too, or stay a mode?** A mode shares the transcript
-   with plan; a subagent isolates but doubles the orchestration. *Current lean: build is a
-   mode (it needs continuity with its own red output), sysDV is a subagent (it must not
-   have continuity).*
+2. **Who certifies the barrier mechanically?** *Answered for the mechanical half:*
+   `wave.sh freeze`, `wave.sh build` and `lock-check.sh` refuse on drift, vacuity, scope
+   and composition; "are these the right tests" is still the human's judgement. Every
+   wall is a refusal with a nonzero exit, never a warning.
+3. **Do build lanes get a subagent too, or stay a mode?** *Answered for the scripted
+   path:* a build lane is a spawned child like `sysdv` (`pi/agents/build.md`, own
+   worktree at the pin, no inherited extensions), because continuity comes from the
+   row's recorded red, not from a shared transcript. Interactively, `build` is still a
+   mode for a human-driven change.
 4. **How is a test's tolerance derived from a requirement?** Nothing here prevents a
    sysDV lane from inventing a tight tolerance the hardware can never meet. *Open:
    probably plan must supply the tolerance in the row, and sysDV may not widen or

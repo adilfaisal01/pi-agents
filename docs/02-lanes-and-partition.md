@@ -54,7 +54,7 @@ One wave = one level. `gate/wave.sh` runs it:
 ```bash
 ./gate/wave.sh rows ledger.md             # id, level, tests
 ./gate/wave.sh levels ledger.md           # the levels present, bottom-up
-./gate/wave.sh sysdv --ledger ledger.md --level L3 --base <pre-implementation-sha> --width 3
+./gate/wave.sh sysdv --ledger ledger.md --level L3 --base <pre-implementation-sha> --confirm --width 3
 ```
 
 Per row, in parallel up to `--width` (3–4 per the rule above):
@@ -67,8 +67,21 @@ Per row, in parallel up to `--width` (3–4 per the rule above):
    test was created, and the suite is **red** at `<base>`. A green suite at the
    pre-implementation commit is the vacuity the whole discipline exists to catch.
 
-Then, serially: compose the lanes' tests, run the composed suite red at the same commit,
-and pin (`gate/lock-check.sh <sha>` is what re-checks the pin afterwards).
+Then, serially: the barrier (`gate/wave.sh freeze`) composes the lanes' tests, runs the
+composed suite red at the same commit, and pins (`gate/lock-check.sh <sha>` is what
+re-checks the pin afterwards). Then wave 2 (`gate/wave.sh build --pin <sha>`) runs one
+implementation lane per row at the pin, and the composed gate runs once for all lanes
+together — that run, and only that run, supports the delivery claim.
+
+```bash
+./gate/wave.sh freeze --ledger ledger.md --level L3 --base <sha> --root <wave-root>
+#   -> composes, requires RED at <sha>, commits, prints the pin as its last line
+./gate/wave.sh build  --ledger ledger.md --level L3 --pin <pin> --confirm --width 3
+#   -> lanes at the pin, then the composed gate, serially, once
+```
+
+`sysdv` and `build` refuse to spawn lanes without `--confirm`: the requirements are
+confirmed by the human (plan authors the ledger) before any lane runs.
 
 `wave.sh` is a script, not an agent call, on purpose: `DECISIONS.md` #2 — scripts
 certify, the human judges. The interactive equivalent is the `subagent` tool with a
@@ -81,6 +94,12 @@ The composed gate. Two lanes green individually is the classic integration failu
 lane's tests are consistent with that lane's assumptions, and the composed tree is the
 first place the assumptions meet. The composed run is serial, after the merge, and it is
 the only run that supports the delivery claim.
+
+It is also why a build lane's own check is scoped to its row: every lane starts at the
+pin, where *every* row's tests exist and the ones it does not own are still red. So the
+lane runs `run-tests.sh -k "<the row's tests>"` and the composed gate runs the whole
+suite with no selection. Green per lane says "this row is satisfied in isolation"; it is
+not, and can never be, the delivery claim.
 
 ## Partition record
 

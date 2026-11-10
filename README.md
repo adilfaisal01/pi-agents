@@ -51,19 +51,43 @@ package](https://pi.dev/docs/packages)); `docs/` is why it is shaped that way;
 | `docs/03-sysdv-agent.md` | the test-author contract: model, tools, worktree, output record |
 | `docs/04-freeze-and-pin.md` | compose-then-freeze; lock surface; the sha pin |
 | `docs/05-build-lanes.md` | build write scope, refusals, shared generated paths |
-| `docs/06-ledger.md` | row schema and verdict vocabulary |
+| `docs/06-ledger.md` | row schema, verdict vocabulary, and the append-only record trail |
 | `docs/07-failure-modes.md` | the catalogue of ways this passes review wrongly |
 | `gate/run-tests.sh` | canonical test command for a frozen suite (locked) |
-| `gate/wave.sh` | run one wave: one sysDV lane per row, parallel, one level at a time |
-| `gate/test-wave.sh` | self-test for `wave.sh` in a throwaway repo with a stub lane runner |
+| `gate/wave.sh` | both waves and the barrier: `sysdv`, `freeze`, `build`, `records` |
+| `gate/test-wave.sh` | self-test for wave 1 in a throwaway repo with a stub lane runner |
+| `gate/test-barrier.sh` | self-test for the barrier: freeze, locked build lanes, composed gate, records |
 | `gate/lock-check.sh` | refuses a tree whose frozen test surface moved since the pin |
 | `gate/test-lock-check.sh` | self-test for `lock-check.sh` |
-| `pi/` | the apparatus that runs: `extensions/agent-modes/` (modes, write scopes, shell policy, drift audit), `extensions/subagent/` (vendored `subagent` tool + write-scope post-check) and `agents/sysdv.md` |
+| `pi/` | the apparatus that runs: `extensions/agent-modes/` (modes, write scopes, shell policy, drift audit), `extensions/subagent/` (vendored `subagent` tool + write-scope post-check), `agents/sysdv.md` (test author) and `agents/build.md` (build lane) |
 | `install.sh` | symlink the apparatus into `~/.pi/agent` (local development only) |
 | `package.json` | the pi manifest that makes `pi install` work |
 | `check.sh` | gate self-test + extension typecheck + extension selftest |
 | `examples/ledger-example.md` | a filled ledger for a control/compiler change |
 | `DECISIONS.md` | what is decided, and the questions still open |
+
+## Running a change end to end
+
+Plan authors `ledger.md` (one row per claim, with `sources` as the row's write scope and
+`level` for the wave ordering). Then the machinery, three commands:
+
+```bash
+# wave 1 — one test author per row, in its own worktree at the pre-implementation commit
+./gate/wave.sh sysdv --ledger ledger.md --level L3 --base <sha> --confirm --width 3
+
+# the barrier — compose, require the whole suite RED, commit, print the pin
+PIN=$(./gate/wave.sh freeze --ledger ledger.md --level L3 --base <sha> --root <wave-root> | tail -1)
+
+# wave 2 — one build lane per row at the pin, then the composed gate, once
+./gate/wave.sh build --ledger ledger.md --level L3 --pin "$PIN" --confirm --width 3
+
+# what happened, per row — the latest line per row; the earlier lines are the trail
+./gate/wave.sh records records.jsonl R1        # default: <ledger dir>/records.jsonl
+```
+
+`sysdv` and `build` refuse to spawn lanes without `--confirm`; `freeze` prints the pin as
+its last line; every stage appends a record and never rewrites one. `./check.sh` runs the
+self-tests for all of it — no model, no network.
 
 ## Quick start
 
