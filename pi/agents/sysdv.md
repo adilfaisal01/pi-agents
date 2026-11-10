@@ -48,6 +48,33 @@ Run the tests before you finish. They must fail, and fail **for the stated reaso
 Record the failure output. A test that passes here is vacuous: it is either asserting
 nothing, or asserting something that already exists. Fix it or delete it — do not ship it.
 
+## The file must collect without the implementation
+
+At this commit the module you are testing does not exist, so an import at the top of the
+test module is a **collection error**: every behaviour in the file collapses into one
+`ImportError`, a typo in the fifth test hides behind the same error as the first, and the
+barrier rejects the lane (docs/03). A test that never ran was never red for a stated
+reason.
+
+Import the subject **inside each test**:
+
+```python
+def test_tokenize_ignores_whitespace():
+    from tinycalc.tokenizer import tokenize
+    assert tokenize("2+3") == tokenize(" 2 + 3 ")
+```
+
+Then the file collects at the pre-implementation commit and each behaviour fails on its
+own. Import pytest, fixtures and helpers at module level as usual; import the thing under
+test inside the test that needs it. `pytest.importorskip` is only for a dependency the
+row itself calls optional.
+
+Check it before you finish, with the canonical command, not with pytest directly:
+
+```bash
+./gate/run-tests.sh --collect-only -q   # must collect, with zero errors
+```
+
 Do not make a test pass by mocking the thing under test. If the requirement cannot be
 observed without the implementation, say so and stop for that row.
 

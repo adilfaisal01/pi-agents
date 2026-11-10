@@ -52,7 +52,15 @@ Not prose. A record the gate can read:
 | test_tracking_cte_bounds | R1 | gate/run-tests.sh -k tracking | 1 failed, 4 passed | NameError: no implementation at C0 |
 ```
 
-Plus the files themselves. The parent's post-check:
+Plus the files themselves. One clause deserves its own line because it is the one that
+looks like good practice and is not: **the test module must still collect at C0.** An
+import of the subject at module scope turns every behaviour in the file into a single
+collection error, so nothing in the file can be red *for its stated reason*. Import the
+subject inside each test; import pytest and helpers at module level as usual. The barrier
+re-checks this (`run-tests.sh --collect-only`), which is why `docs/04` can require a
+clean collect at the pre-implementation commit at all.
+
+The parent's post-check:
 
 ```bash
 git -C <worktree> diff --name-only        # must be ⊆ tests/** + test config
