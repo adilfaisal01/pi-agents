@@ -115,6 +115,21 @@ levels_cmd() { # distinct levels present, bottom-up (L3 before L0)
 	rows_cmd "$ledger" | cut -f2 | grep -v '^$' | sort -r | uniq
 }
 
+# laneable_rows <ledger> <level> -> id<TAB>level<TAB>tests
+# A row with no `tests` cell is structural or declared (docs/06): there is nothing to be
+# red, so it is not a lane and no wave may manufacture one. Waves skip it and say so —
+# silently dropping it would make the ledger's own "declared" rows look implemented.
+laneable_rows() {
+	rows_cmd "$1" | while IFS=$'\t' read -r id lvl tests; do
+		[ "$lvl" = "$2" ] || continue
+		if [ -z "$tests" ]; then
+			printf 'wave: %s has no tests (structural/declared) — not a lane\n' "$id" >&2
+			continue
+		fi
+		printf '%s\t%s\t%s\n' "$id" "$lvl" "$tests"
+	done
+}
+
 # --- lock surface (docs/04) ------------------------------------------------
 # The locked paths, and why each one is here: tests/** are the assertions,
 # conftest.py can redefine fixtures, the pytest configuration IS the selector
@@ -516,10 +531,9 @@ freeze_cmd() {
 	local id lvl
 	while IFS=$'\t' read -r id lvl _; do
 		[ -n "$id" ] || continue
-		[ "$lvl" = "$level" ] || continue
 		ids+=("$id")
-	done < <(rows_cmd "$ledger")
-	[ "${#ids[@]}" -gt 0 ] || die "no rows at level $level in $ledger"
+	done < <(laneable_rows "$ledger" "$level")
+	[ "${#ids[@]}" -gt 0 ] || die "no laneable rows at level $level in $ledger (a row with no tests is structural or declared)"
 
 	# Freeze only a wave that finished. A lane that failed did not produce tests anyone
 	# read, and freezing its neighbours would pin a suite with a hole in it.
@@ -645,11 +659,10 @@ sysdv_cmd() {
 	local id lvl _tests
 	while IFS=$'\t' read -r id lvl _tests; do
 		[ -n "$id" ] || continue
-		[ "$lvl" = "$level" ] || continue
 		ids+=("$id")
-	done < <(rows_cmd "$ledger")
+	done < <(laneable_rows "$ledger" "$level")
 
-	[ "${#ids[@]}" -gt 0 ] || die "no rows at level $level in $ledger"
+	[ "${#ids[@]}" -gt 0 ] || die "no laneable rows at level $level in $ledger (a row with no tests is structural or declared)"
 	printf 'wave: level %s, base %s, %s row(s), width %s\n' "$level" "${base:0:12}" "${#ids[@]}" "$width"
 	printf 'wave: worktrees under %s\n' "$root"
 
@@ -954,10 +967,9 @@ build_cmd() {
 	local id lvl
 	while IFS=$'\t' read -r id lvl _; do
 		[ -n "$id" ] || continue
-		[ "$lvl" = "$level" ] || continue
 		ids+=("$id")
-	done < <(rows_cmd "$ledger")
-	[ "${#ids[@]}" -gt 0 ] || die "no rows at level $level in $ledger"
+	done < <(laneable_rows "$ledger" "$level")
+	[ "${#ids[@]}" -gt 0 ] || die "no laneable rows at level $level in $ledger (a row with no tests is structural or declared)"
 
 	# Group the rows into lanes (docs/02 rule 2). A row named by the partition table
 	# belongs to that lane; a row named by two lanes is a partition error.

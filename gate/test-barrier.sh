@@ -400,6 +400,26 @@ fi
 ok "the double-listing refusal names the row" \
 	"$(grep -q 'row R2 is listed in 2 lanes' "$REPO/d2.txt" && echo 1)" "$(cat "$REPO/d2.txt")"
 
+# --- a row with no tests is not a lane ----------------------------------------
+# docs/06: a row with no test is legitimate (structural or declared). It has nothing to
+# be red, so waves skip it and say so; the freeze does not wait for a lane that must not
+# exist.
+LEDGER_STATIC="$REPO/ledger-static.md"
+ledger "$LEDGER_STATIC" '| R1 | L3 | add(a,b) returns a+b | direct sum | none | src/app.py | tests/test_R1.py::test_add | ./gate/run-tests.sh | proved |
+| R9 | L3 | the codec is declared safe | trusted base named | none |  |  | — | declared |'
+"$WAVE" sysdv --ledger "$LEDGER_STATIC" --level L3 --base "$BASE" --confirm --width 2 \
+	--root "$WT/static" --child "$STUB/sysdv-good" --no-records >"$REPO/e1.txt" 2>&1 || true
+ok "a row with no tests is skipped, not spawned" \
+	"$(grep -q 'R9 has no tests' "$REPO/e1.txt" && ! grep -q '^R9' "$REPO/e1.txt" && echo 1)" \
+	"$(cat "$REPO/e1.txt")"
+ok "the laneable row still runs" \
+	"$(grep -qE '^R1[[:space:]]+ok' "$REPO/e1.txt" && echo 1)"
+"$WAVE" freeze --ledger "$LEDGER_STATIC" --level L3 --base "$BASE" \
+	--root "$WT/static" --no-records >"$REPO/e2.txt" 2>&1 || true
+ok "freeze does not wait for a lane on a testless row" \
+	"$([ "$(git -C "$REPO" cat-file -t "$(tail -1 "$REPO/e2.txt")" 2>/dev/null || true)" = commit ] && echo 1)" \
+	"$(cat "$REPO/e2.txt")"
+
 # --- the pin is a wall, not a suggestion --------------------------------------
 # A later build cannot silently widen the frozen surface: lock-check is what makes the
 # pin a sha over the tests, and it must still be clean after all of the above.
