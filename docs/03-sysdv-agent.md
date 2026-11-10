@@ -37,6 +37,11 @@ Suggested model roles (adjust to what the provider actually serves):
 | sysDV | a family **not** used by build | decorrelates failure modes |
 | build | builder-family | implementation throughput |
 
+The shipped `sysdv.md` deliberately carries **no** `model:` line. A package cannot know
+which providers you have, and a hardcoded default would silently break the rule above by
+inheriting the parent's model. Set it where the agent file lives, or in a copy under
+`~/.pi/agent/agents/sysdv.md` (which wins over the shipped one).
+
 ## Output contract
 
 Not prose. A record the gate can read:
@@ -55,6 +60,15 @@ git -C <worktree> status --porcelain      # untracked test files must be listed 
 ```
 
 Anything outside the scope: discard the whole lane run, do not cherry-pick around it.
+
+**The post-check is code, not discipline.** `pi/extensions/subagent/` reads that
+`git status` itself when the child exits, compares it against the `write_scope` in the
+agent's frontmatter, and fails the lane with the offending paths. A lane that wrote
+source cannot report success. Derived artifacts are filtered (a lane must run the suite,
+and running it writes caches) and the tree is snapshotted before the child starts, so a
+worktree that was already dirty is not blamed on it. What it still cannot see: a child
+handed the wrong `cwd`, or a write **outside** the worktree — `sysdv` has an unrestricted
+shell, so `pip install` into user site-packages is possible and is not caught here.
 
 ## Rejection rules (apply per lane, before the barrier)
 

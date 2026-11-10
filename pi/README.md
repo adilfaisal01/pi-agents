@@ -9,9 +9,14 @@ pi/
 │   ├── config.json             the shipped profile (order, keybinding, scopes)
 │   ├── prompts/                one system-prompt contract per mode
 │   ├── tsconfig.json           typecheck only; pi loads the .ts itself
-│   ├── prepare-types.sh        links the pi release's types into ./node_modules
+│   ├── prepare-types.sh        links the pi release's types into pi/node_modules
 │   └── selftest.mjs            assertions against the real extension, no pi needed
-└── agents/sysdv.md             subagent definition (needs a subagent tool — see below)
+├── extensions/subagent/        the `subagent` tool (vendored from pi, adapted)
+│   ├── index.ts                spawns a child pi per agent; write-scope post-check
+│   ├── agents.ts               agent discovery + this package's own agents dir
+│   ├── UPSTREAM-README.md      provenance: what was vendored and from where
+│   └── selftest.mjs            assertions for the LOCAL changes only
+└── agents/sysdv.md             the test-author agent, shipped and discovered
 ```
 
 ## Install
@@ -24,9 +29,8 @@ pi install git:github.com/<owner>/v-model-agents     # or: pi install npm:pi-v-m
 pi -e .                                              # try it for one session, no settings change
 ```
 
-`package.json` declares the extension under the `pi` manifest, so pi's package manager
-finds `pi/extensions/agent-modes/index.ts` on its own. `pi update --extensions` moves a
-git install to the latest ref.
+`package.json` declares both extensions under the `pi` manifest, so pi's package manager
+finds them on its own. `pi update --extensions` moves a git install to the latest ref.
 
 `./install.sh` still exists for local development against this checkout (it symlinks the
 profile into `~/.pi/agent`, so `git pull` updates it in place and `/reload` picks it up).
@@ -91,12 +95,56 @@ They assume a Python-ish repository (`tests/`, `conftest.py`, `pyproject.toml`).
 for the repository you are working in — from `<repo>/.pi/agent-modes.json`, which you can
 commit.
 
+## The subagent tool (vendored, and why)
+
+`sysdv` has to run in a **separate process** — it must not see the conversation that will
+write the implementation — so it needs a tool that spawns one. pi has no built-in one:
+the built-in extensions are only `mcp`, `llama.cpp`, `codemode`, and `tool-search`, and
+pi ships `subagent` as an **example**. A pi package can install extensions, skills,
+prompt templates, and themes — **not** agent definitions — so pointing users at
+`~/.pi/agent/agents/sysdv.md` was the only option and it made `pi install` insufficient.
+
+`pi/extensions/subagent/` is pi's example (MIT, `earendil-works`), vendored so the
+package is self-contained. Two changes, both marked `LOCAL:` in the source:
+
+| change | why |
+| --- | --- |
+| a third agent root: this package's own `pi/agents/` | `pi install` alone produces a usable `sysdv`; a user-authored agent of the same name still wins, then the project's |
+| `write_scope` frontmatter + a post-check | after a child exits cleanly its worktree is read with `git status`, and the lane **fails** with the offending paths if anything outside the scope moved |
+| the child runs with `-ne` | otherwise the child inherits the parent's extensions — including **this** mode guard, which starts it in `oracle` and strips `write`/`edit`. That happened on a real run: sysdv could not write the test it was asked for |
+
+That second one is `docs/01`'s "post-check" layer turned into code instead of a rule in a
+README. It is deliberately after the fact: the child owns its own tool list, so the only
+truthful check is what the tree looks like when it stops. Two details come from runs that
+failed without them: the tree is snapshotted **before** the spawn (so a pre-dirty worktree
+is not blamed on the child), and caches are filtered (`__pycache__`, `.pytest_cache`,
+`node_modules`, `.venv`, …) because a legitimate lane has to *run* the suite and running it
+writes bytecode.
+
+Two cautions:
+
+- **Run one subagent extension, not two.** pi replaces a same-named tool without a
+  warning, so installing this alongside another `subagent` package makes the winner
+  arbitrary.
+- **Upstream will drift.** The vendored copy is 1.5.1's example; re-diff against
+  `examples/extensions/subagent/` when you upgrade pi, and keep the `LOCAL:` markers
+  greppable.
+- **The child inherits no extensions** (`-ne`). That is what keeps the contract
+  deterministic, and it also means a child gets no MCP servers, skills, or prompt
+  templates. If a lane needs one, pass it through the agent file's `tools` rather than
+  re-enabling discovery.
+
 ## Verify
 
 ```bash
 cd pi/extensions/agent-modes && node selftest.mjs   # 37 assertions, no pi required
-./check.sh                                          # + tsc + gate self-test
+cd pi/extensions/subagent   && node selftest.mjs    # 25 assertions on the LOCAL changes
+./check.sh                                          # both, plus tsc and the gate self-test
 ```
+
+The subagent selftest is narrow on purpose: it tests the package-relative agent
+discovery, the `write_scope` parsing, and the post-check against a real throwaway git
+tree. Process spawning and streaming are upstream's and are pi's own test surface.
 
 `selftest.mjs` imports `index.ts` directly (Node ≥ 23 strips types) and drives
 `session_start` / `tool_call` / `tool_result` with a fake API and a throwaway git repo.

@@ -11,7 +11,8 @@
   "type": "module",
   "pi": {
     "extensions": [
-      "./pi/extensions/agent-modes/index.ts"
+      "./pi/extensions/agent-modes/index.ts",
+      "./pi/extensions/subagent/index.ts"
     ]
   },
   "peerDependencies": {

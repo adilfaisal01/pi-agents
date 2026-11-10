@@ -15,5 +15,7 @@ dist/
 .zed/
 .vscode/
 
-# Linked pi type packages (prepare-types.sh)
+# Linked pi type packages (prepare-types.sh) — the link is a symlink, so the
+# trailing-slash form does not match it and both spellings are needed.
 node_modules/
+node_modules

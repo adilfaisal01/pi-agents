@@ -61,13 +61,14 @@ the documents yet — read it as a known gap, not as a plan.
    public.
 7. **Does this repo carry the mode/guard implementation?** *Answered: yes.* `pi/` holds
    the guard and `package.json` makes it installable.
-8. **How does `sysdv` reach a stranger's pi?** pi's built-in extensions are only
-   `mcp`, `llama.cpp`, `codemode`, `tool-search` — subagent is an *example*, not built in,
-   and a pi package can install extensions/skills/prompts/themes but **not** agent
-   definitions. So `pi/agents/sysdv.md` alone installs nothing. *Open, two options:*
-   (a) the package ships its own minimal runner that spawns `pi --print --mode json
-   --no-session --tools … --append-system-prompt agents/sysdv.md` and then verifies the
-   child's `git diff --name-only` ⊆ `tests/**` — self-contained, and it closes the hole
-   where `keepExtensions` lets a read-only mode delegate a write; (b) vendor pi's MIT
-   subagent example (two files, ~48 KB, upstream-coupled) and document the
-   `~/.pi/agent/agents/` copy step.
+8. **How does `sysdv` reach a stranger's pi?** *Answered: vendor pi's subagent example
+   (MIT) and adapt it.* pi's built-in extensions are only `mcp`, `llama.cpp`, `codemode`,
+   `tool-search` — subagent is an *example* — and a pi package can install
+   extensions/skills/prompts/themes but **not** agent definitions. So the package now
+   ships `pi/extensions/subagent/` (upstream's two files, `LOCAL:` markers on every
+   change) with two adaptations: a third agent-discovery root pointing at the package's
+   own `pi/agents/` (so `pi install` alone yields a working `sysdv`, while a user's own
+   agent of that name still wins), and a `write_scope` post-check that fails the lane if
+   the child wrote outside it. Rejected: a hand-written ~120-line runner (more code to
+   own for less capability) and third-party packages (`@mystilleef/pi-subagent` is a
+   46k-line framework whose tool takes no `cwd`, so it cannot do the worktree contract).

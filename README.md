@@ -56,7 +56,7 @@ package](https://pi.dev/docs/packages)); `docs/` is why it is shaped that way;
 | `gate/run-tests.sh` | canonical test command for a frozen suite (locked) |
 | `gate/lock-check.sh` | refuses a tree whose frozen test surface moved since the pin |
 | `gate/test-lock-check.sh` | self-test for `lock-check.sh` |
-| `pi/` | the apparatus that runs: `extensions/agent-modes/` (modes, write scopes, shell policy, drift audit) and `agents/sysdv.md` |
+| `pi/` | the apparatus that runs: `extensions/agent-modes/` (modes, write scopes, shell policy, drift audit), `extensions/subagent/` (vendored `subagent` tool + write-scope post-check) and `agents/sysdv.md` |
 | `install.sh` | symlink the apparatus into `~/.pi/agent` (local development only) |
 | `package.json` | the pi manifest that makes `pi install` work |
 | `check.sh` | gate self-test + extension typecheck + extension selftest |
@@ -95,7 +95,7 @@ Working on this repository itself:
 
 Docs plus the apparatus: the mode guard (`pi/extensions/agent-modes/`) enforces write
 scopes, shell policy, per-mode models and the tracked-tree audit, and is covered by
-`selftest.mjs`. The gate (`gate/`) is tested by its own self-test. Still open: the lane
-orchestration itself (a prompt contract for `plan`, not code), delivery of the `sysdv`
-subagent (pi ships no built-in subagent tool, and a pi package cannot install agent
-definitions — see `DECISIONS.md`), and the hardware queue (`DECISIONS.md`#5).
+`selftest.mjs`. The gate (`gate/`) is tested by its own self-test. What is still open: the
+lane orchestration itself (a prompt contract for `plan`, not code) and the hardware queue
+(`DECISIONS.md`#5). `sysdv` ships with the package: the `subagent` tool is pi's example,
+vendored and adapted so `pi install` is the whole install.
