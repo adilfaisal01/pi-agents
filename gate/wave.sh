@@ -86,6 +86,16 @@ AWK_HELPERS='
 	}
 '
 
+# A ledger cell may say `none` or an em dash instead of being blank; both mean "nothing
+# here". Treating a dash as a test name or a source path is how a `declared` row becomes
+# a lane that can never be green.
+blank_cell() { # blank_cell <value> -> the value, or nothing for none/-/em dash
+	case "$1" in
+	'' | - | — | none | None | NONE) return 0 ;;
+	*) printf '%s' "$1" ;;
+	esac
+}
+
 rows_cmd() {
 	local ledger="${1:-}"
 	[ -n "$ledger" ] && [ -f "$ledger" ] || die "usage: wave.sh rows <ledger>"
@@ -122,6 +132,7 @@ levels_cmd() { # distinct levels present, bottom-up (L3 before L0)
 laneable_rows() {
 	rows_cmd "$1" | while IFS=$'\t' read -r id lvl tests; do
 		[ "$lvl" = "$2" ] || continue
+		tests="$(blank_cell "$tests")"
 		if [ -z "$tests" ]; then
 			printf 'wave: %s has no tests (structural/declared) — not a lane\n' "$id" >&2
 			continue
@@ -219,7 +230,8 @@ json_array() { # json_array <item>... -> ["a","b"]
 # it actually knows (freeze knows the pin, a build lane does not).
 rec_append() {
 	local file="$1" stage="$2" status="$3" id="$4" ledger="$5"
-	local test_place="$6" files="$7" extra="${8:-}"
+	local test_place files="$7" extra="${8:-}"
+	test_place="$(blank_cell "$6")"
 	[ -n "$file" ] || return 0
 	[ -n "$id" ] || return 0
 	mkdir -p "$(dirname "$file")"
@@ -745,7 +757,7 @@ lane_groups() { # lane_groups <ledger> -> "lane<TAB>rows" from the partition tab
 
 row_test_selection() { # row_test_selection <ledger> <id> -> -k expression, or empty
 	local tests_raw
-	tests_raw="$(row_field "$1" "$2" tests)"
+	tests_raw="$(blank_cell "$(row_field "$1" "$2" tests)")"
 	[ -n "$tests_raw" ] || return 0
 	local -a names=()
 	local t name
@@ -768,7 +780,7 @@ row_test_selection() { # row_test_selection <ledger> <id> -> -k expression, or e
 
 row_sources() { # row_sources <ledger> <id> -> one path per line, no trailing slash
 	local raw
-	raw="$(row_field "$1" "$2" sources)"
+	raw="$(blank_cell "$(row_field "$1" "$2" sources)")"
 	[ -n "$raw" ] || return 0
 	printf '%s\n' "$raw" | tr ',' '\n' | tr -s '[:space:]' '\n' | sed 's:/$::' | sed '/^$/d'
 }

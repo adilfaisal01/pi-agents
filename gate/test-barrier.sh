@@ -406,7 +406,7 @@ ok "the double-listing refusal names the row" \
 # exist.
 LEDGER_STATIC="$REPO/ledger-static.md"
 ledger "$LEDGER_STATIC" '| R1 | L3 | add(a,b) returns a+b | direct sum | none | src/app.py | tests/test_R1.py::test_add | ./gate/run-tests.sh | proved |
-| R9 | L3 | the codec is declared safe | trusted base named | none |  |  | — | declared |'
+| R9 | L3 | the codec is declared safe | trusted base named | none | — | — | — | declared |'
 "$WAVE" sysdv --ledger "$LEDGER_STATIC" --level L3 --base "$BASE" --confirm --width 2 \
 	--root "$WT/static" --child "$STUB/sysdv-good" --no-records >"$REPO/e1.txt" 2>&1 || true
 ok "a row with no tests is skipped, not spawned" \
