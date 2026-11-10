@@ -380,6 +380,26 @@ run_lane() {
 	printf '%s\tok\tred at %s\n' "$id" "${base:0:12}"
 }
 
+# new_tests_not_red <runner-log> <new-test-paths-file>
+# Prints the composed test files that contain a test which did NOT fail at the base
+# commit — PASSED, SKIPPED or XPASS. Empty when every test in those files failed.
+#
+# This is the mechanical half of docs/04's "every new test must fail, for its stated
+# reason": the suite-level red check cannot see one vacuously-passing test inside a
+# lane whose neighbours are red, and that test would be frozen as if it measured
+# something. Coverage caveat: it reads the runner's per-test output, so a runner that
+# reports no per-test results leaves only the suite-level check — the caller says so
+# rather than claiming a clean vacuity check.
+new_tests_not_red() {
+	awk -v list="$2" '
+		BEGIN { while ((getline l < list) > 0) if (l != "") want[l] = 1 }
+		index($0, "::") > 0 && $0 ~ / (PASSED|SKIPPED|XPASS)( |$)/ {
+			for (w in want) if (index($0, w "::") == 1) seen[w] = 1
+		}
+		END { for (w in seen) print w }
+	' "$1"
+}
+
 # --- composing lanes -------------------------------------------------------
 # Compose is a mechanical apply of each lane's scoped diff onto a tree at the same
 # commit — not a merge. Two lanes claiming one path is a partition failure (docs/02
@@ -530,8 +550,19 @@ freeze_cmd() {
 	# pre-implementation commit is the only place that proves the tests measure something
 	# that does not exist yet — and it must collect cleanly, because a collection error
 	# is a test that cannot even be wrong.
-	if (cd "$root/compose" && ./gate/run-tests.sh -q >"$root/compose-red.log" 2>&1); then
+	if (cd "$root/compose" && ./gate/run-tests.sh -v >"$root/compose-red.log" 2>&1); then
 		refuse "the composed suite is GREEN at ${base:0:12} — every new test must be red there (docs/04); see $root/compose-red.log"
+	fi
+	# ... and red per test, not just per suite: a lane whose neighbours are red can still
+	# ship a test that passes at the base commit, and that test would be frozen as if it
+	# measured something (docs/03 rejects it, docs/04 requires every new test to fail).
+	local vacuous
+	vacuous="$(new_tests_not_red "$root/compose-red.log" "$root/compose.paths")"
+	if [ -n "$vacuous" ]; then
+		refuse "a new test does not fail at ${base:0:12} — vacuous or already true (docs/03): $(printf '%s' "$vacuous" | paste -sd, -)"
+	fi
+	if ! grep -qE ' (PASSED|FAILED|ERROR|SKIPPED|XPASS|XFAIL) ' "$root/compose-red.log"; then
+		printf 'wave: note — the runner reported no per-test results; vacuity was checked only at suite level\n' >&2
 	fi
 	if ! (cd "$root/compose" && ./gate/run-tests.sh --collect-only -q >"$root/compose-collect.log" 2>&1); then
 		refuse "the composed suite does not collect cleanly (see $root/compose-collect.log)"

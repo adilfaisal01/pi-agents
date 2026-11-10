@@ -52,10 +52,12 @@ cat >gate/run-tests.sh <<'SH'
 #!/usr/bin/env bash
 cd "$(git rev-parse --show-toplevel)"
 sel=""
+verbose=0
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--collect-only) exit 0 ;;
 	-k) sel="${2:-}"; shift 2 ;;
+	-v) verbose=1; shift ;;
 	*) shift ;;
 	esac
 done
@@ -67,9 +69,20 @@ rc=0
 for t in tests/test_*.py; do
 	[ -f "$t" ] || continue
 	if [ -n "$names" ] && ! grep -Eq "def test_(${names})\\(" "$t"; then continue; fi
+	# `# vacuous: yes` is a test that passes at the base commit on purpose, so the
+	# barrier's per-test vacuity check has something to catch.
+	if grep -qx '# vacuous: yes' "$t"; then
+		[ "$verbose" = 1 ] && printf '%s::test_vacuous PASSED\n' "$t"
+		continue
+	fi
 	while IFS= read -r sym; do
 		[ -n "$sym" ] || continue
-		grep -rq "^def ${sym}(" src/ || rc=1
+		if grep -rq "^def ${sym}(" src/; then
+			[ "$verbose" = 1 ] && printf '%s::test_%s PASSED\n' "$t" "$sym"
+		else
+			[ "$verbose" = 1 ] && printf '%s::test_%s FAILED\n' "$t" "$sym"
+			rc=1
+		fi
 	done < <(sed -n 's/^# expects: //p' "$t")
 done
 exit $rc
@@ -276,6 +289,25 @@ printf 'R1\tok\tred at %s\n' "${BASE:0:12}" >"$WT/vacuous/R1.result"
 	--root "$WT/vacuous" --no-records >"$REPO/b6.txt" 2>&1 || true
 ok "freeze refuses a composed suite that is GREEN at the base" \
 	"$(grep -q 'GREEN at' "$REPO/b6.txt" && echo 1)" "$(cat "$REPO/b6.txt")"
+
+# A lane that ships one vacuously-passing test beside a genuinely red neighbour. The
+# suite is red, so the suite-level wall passes; the per-test wall is what refuses it.
+LEDGER_MIXED="$REPO/ledger-mixed.md"
+ledger "$LEDGER_MIXED" '| R1 | L3 | red row | none | none | src/app.py | tests/test_real.py::test_add | ./gate/run-tests.sh | proved |
+| R2 | L3 | vacuous row | none | none | src/math.py | tests/test_vacuous.py::test_vacuous | ./gate/run-tests.sh | proved |'
+mkdir -p "$WT/mixed"
+git -C "$REPO" worktree add -q --detach "$WT/mixed/R1" "$BASE"
+git -C "$REPO" worktree add -q --detach "$WT/mixed/R2" "$BASE"
+printf '# expects: add\ndef test_add():\n    assert add(1, 1)\n' >"$WT/mixed/R1/tests/test_real.py"
+printf '# vacuous: yes\ndef test_vacuous():\n    assert True\n' >"$WT/mixed/R2/tests/test_vacuous.py"
+printf 'R1\tok\tred at %s\n' "${BASE:0:12}" >"$WT/mixed/R1.result"
+printf 'R2\tok\tred at %s\n' "${BASE:0:12}" >"$WT/mixed/R2.result"
+"$WAVE" freeze --ledger "$LEDGER_MIXED" --level L3 --base "$BASE" \
+	--root "$WT/mixed" --no-records >"$REPO/b7.txt" 2>&1 || true
+ok "freeze refuses a vacuously-passing test beside a red one" \
+	"$(grep -q 'does not fail at' "$REPO/b7.txt" && echo 1)" "$(cat "$REPO/b7.txt")"
+ok "the vacuity refusal names the file, not the whole lane" \
+	"$(grep -q 'tests/test_vacuous.py' "$REPO/b7.txt" && echo 1)"
 
 # Spawning build lanes needs the same confirmation as sysDV.
 if "$WAVE" build --ledger "$LEDGER" --level L3 --pin "$PIN" --width 1 \
