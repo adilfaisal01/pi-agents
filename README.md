@@ -54,6 +54,8 @@ package](https://pi.dev/docs/packages)); `docs/` is why it is shaped that way;
 | `docs/06-ledger.md` | row schema and verdict vocabulary |
 | `docs/07-failure-modes.md` | the catalogue of ways this passes review wrongly |
 | `gate/run-tests.sh` | canonical test command for a frozen suite (locked) |
+| `gate/wave.sh` | run one wave: one sysDV lane per row, parallel, one level at a time |
+| `gate/test-wave.sh` | self-test for `wave.sh` in a throwaway repo with a stub lane runner |
 | `gate/lock-check.sh` | refuses a tree whose frozen test surface moved since the pin |
 | `gate/test-lock-check.sh` | self-test for `lock-check.sh` |
 | `pi/` | the apparatus that runs: `extensions/agent-modes/` (modes, write scopes, shell policy, drift audit), `extensions/subagent/` (vendored `subagent` tool + write-scope post-check) and `agents/sysdv.md` |
@@ -84,8 +86,14 @@ Working on this repository itself:
 ./install.sh --dry-run      # what install.sh would link into ~/.pi/agent (dev path)
 ./check.sh                  # gate self-test + tsc + extension selftest (all verifiable)
 
-# verify the gate script itself, standalone
+# verify the gate scripts themselves, standalone
 ./gate/test-lock-check.sh
+./gate/test-wave.sh
+
+# run a wave: one sysDV lane per row at one level, in parallel, under a
+# pre-implementation commit. Refuses a lane that writes outside tests/, creates
+# no test, or finds the suite green at that commit.
+./gate/wave.sh sysdv --ledger ledger.md --level L3 --base <sha> --width 3
 
 # after freezing a suite at commit <sha>
 ./gate/lock-check.sh <sha>          # exit 0 clean, 1 drift, 2 usage

@@ -41,6 +41,40 @@ one lane.
 - The cap is a property of the runner (`MAX_PARALLEL_TASKS = 8` in the shipped
   `subagent` example), not a target.
 
+## Waves are levels, and they run bottom-up
+
+A row carries a `level` (docs/06): `L3` unit, `L2` component, `L1` subsystem,
+`L0` system. That is the V's right arm — the verification at a level is written at the
+same level of abstraction as the claim, by a party that did not write the code — and it
+is what makes bottom-up ordering meaningful: you cannot freeze a system-level test while
+the unit-level contracts it composes are still moving.
+
+One wave = one level. `gate/wave.sh` runs it:
+
+```bash
+./gate/wave.sh rows ledger.md             # id, level, tests
+./gate/wave.sh levels ledger.md           # the levels present, bottom-up
+./gate/wave.sh sysdv --ledger ledger.md --level L3 --base <pre-implementation-sha> --width 3
+```
+
+Per row, in parallel up to `--width` (3–4 per the rule above):
+
+1. `git worktree add --detach <root>/<id> <base>` — one worktree per lane, so generated
+   paths and caches cannot collide (partition rule 3).
+2. spawn a `pi` child in that worktree with the row's requirement, design and interface,
+   the `sysdv` system prompt, and no inherited extensions.
+3. refuse the lane unless: nothing outside `tests/**` + test config changed, at least one
+   test was created, and the suite is **red** at `<base>`. A green suite at the
+   pre-implementation commit is the vacuity the whole discipline exists to catch.
+
+Then, serially: compose the lanes' tests, run the composed suite red at the same commit,
+and pin (`gate/lock-check.sh <sha>` is what re-checks the pin afterwards).
+
+`wave.sh` is a script, not an agent call, on purpose: `DECISIONS.md` #2 — scripts
+certify, the human judges. The interactive equivalent is the `subagent` tool with a
+`cwd` per lane; the difference is that the script also creates the worktree and checks
+the three refusals, so a wrong wave fails instead of looking successful.
+
 ## The one thing that cannot be parallelized away
 
 The composed gate. Two lanes green individually is the classic integration failure: each

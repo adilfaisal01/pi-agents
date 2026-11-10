@@ -5,13 +5,14 @@ One row per claim. A row is the unit of work, of parallelism, and of verificatio
 ## Schema
 
 ```markdown
-| id | requirement | design | interface | tests | evidence | verdict |
+| id | level | requirement | design | interface | tests | evidence | verdict |
 | --- | --- | --- | --- | --- | --- | --- |
-| R1 | CTE mean ≤ 0.05 m, max ≤ 0.10 m over 48 s at stride 12 | anchored frame: p' = R(−θ)(p − anchor) | none | test_tracking_cte_bounds | run_tracking --anchor (48 s) | proved |
+| R1 | L1 | CTE mean ≤ 0.05 m, max ≤ 0.10 m over 48 s at stride 12 | anchored frame: p' = R(−θ)(p − anchor) | none | test_tracking_cte_bounds | run_tracking --anchor (48 s) | proved |
 ```
 
 | column | rule |
 | --- | --- |
+| **level** | the abstraction this row is claimed at: `L3` unit, `L2` component, `L1` subsystem/integration, `L0` system/end-to-end. The test must be written at *this* level, and a wave (`gate/wave.sh`) only runs rows at one level at a time, bottom-up. Two rows at different levels are two rows, not two opinions about one claim. |
 | **requirement** | measurable. Inputs, output, tolerance, duration, conditions. Not an adjective. |
 | **design** | one line, plus the alternative that was rejected and why. A design with no rejected alternative is an assumption. |
 | **interface** | what the change is allowed to touch: C-ABI ports and order, `state_*` layout, manifest fields, pins. `none` is a claim, not a blank. |
