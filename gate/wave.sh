@@ -91,6 +91,7 @@ rows_cmd() {
 	[ -n "$ledger" ] && [ -f "$ledger" ] || die "usage: wave.sh rows <ledger>"
 	awk -F'|' "$AWK_HELPERS"'
 		/^\|[ ]*id[ ]*\|/ && !hdr { header(); next }
+		hdr && !/^\|/ { exit }
 		hdr && /^\|[ ]*-+/ { next }
 		hdr && /^\|/ {
 			if (cell("id") == "") next
@@ -102,6 +103,7 @@ rows_cmd() {
 row_field() { # row_field <ledger> <id> <column>
 	awk -F'|' -v want="$2" -v column="$3" "$AWK_HELPERS"'
 		/^\|[ ]*id[ ]*\|/ && !hdr { header(); next }
+		hdr && !/^\|/ { exit }
 		hdr && /^\|[ ]*-+/ { next }
 		hdr && /^\|/ && cell("id") == want { print cell(column); exit }
 	' "$1"

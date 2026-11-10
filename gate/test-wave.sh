@@ -98,6 +98,24 @@ ok "levels are emitted bottom-up (L3 before L2)" \
 	"$([ "$("$WAVE" levels "$LEDGER" | paste -sd, -)" = "L3,L2" ] && echo 1)" \
 	"$("$WAVE" levels "$LEDGER" | paste -sd, -)"
 
+# The ledger carries a lane-partition table too (docs/02, examples/). Only the first
+# table is rows; a second table must not become rows with a blank level.
+cat >>"$LEDGER" <<'MD'
+
+## Lane partition
+
+| lane | rows | write scope |
+| --- | --- | --- |
+| L1 | R1, R2 | src/ |
+| L2 | R3 | tests/ |
+MD
+ok "a second table in the ledger is not part of the rows" \
+	"$([ "$(printf '%s\n' "$("$WAVE" rows "$LEDGER")" | wc -l)" -eq 3 ] && echo 1)" \
+	"$("$WAVE" rows "$LEDGER" | tr '\t' ' ' | paste -sd';' -)"
+ok "the lane table does not pollute the levels" \
+	"$([ "$("$WAVE" levels "$LEDGER" | paste -sd, -)" = "L3,L2" ] && echo 1)" \
+	"$("$WAVE" levels "$LEDGER" | paste -sd, -)"
+
 # --- a level selects only its rows, and runs them in parallel ------------------
 "$WAVE" sysdv --ledger "$LEDGER" --level L3 --base "$BASE" --width 2 --confirm \
 	--root "$WTROOT/a" --child "$STUB_DIR/good" --no-records >"$REPO/out-a.txt" 2>&1 || true
