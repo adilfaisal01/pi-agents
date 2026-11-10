@@ -127,6 +127,22 @@ Without this path, "locked" means "frozen wrong", and the build lane's only hone
 is to stop. Say that in the build prompt: stopping is a valid outcome; implementing
 against a wrong test is not.
 
+Run against the amended pin, and anchor it the same way freeze does:
+
+```bash
+git update-ref refs/vmodel/pins/L2-amend-$(git rev-parse --short=12 HEAD) HEAD
+./gate/wave.sh build --ledger ledger.md --level L2 --pin "$(git rev-parse HEAD)" --confirm
+```
+
+`build` only needs a commit that contains the frozen surface, so the amendment commit is
+a valid pin. The old pin stays in the trail: its `frozen` record is still there, and the
+`built_green` records name the new one — which is what lets a reviewer see that the spec
+moved before the code existed.
+
+One thing worth expecting: the build lane is **supposed** to stop here. A lane that
+reports "these two assertions cannot both hold, here is the rule you did not state" is a
+successful run, and its refusal is a record, not lost log output.
+
 ## What the pin does not cover
 
 - **Behaviour outside the suite.** The pin freezes what the tests claim, not whether the
