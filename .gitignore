@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[codz]
+.pytest_cache/
+
+# Build / cache
+build/
+dist/
+.zig-cache/
+*.so
+
+# Editors
+.DS_Store
+*.swp
+.zed/
+.vscode/

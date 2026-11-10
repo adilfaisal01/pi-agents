@@ -1,0 +1,85 @@
+# 04 — Freeze and pin
+
+The barrier between the two waves. It is mechanical: compose, run, reject, pin.
+
+## Why the pin is a commit, not a file list
+
+A list of test files is not the test suite. The **selector** decides what runs, and the
+selector usually lives outside `tests/`:
+
+```toml
+# pyproject.toml
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts  = "-m 'not integration and not mcp'"     # <- deselects two categories
+```
+
+A build lane that edits `addopts` goes green without changing a single assertion.
+`tests/conftest.py` can redefine fixtures; the runner command can add `-k`. So the lock
+surface is:
+
+| locked path | why |
+| --- | --- |
+| `tests/**` | the assertions |
+| `conftest.py` (any level) | fixtures can redefine reality |
+| `pyproject.toml`, `pytest.ini`, `tox.ini`, `setup.cfg` | the selector |
+| `gate/run-tests.sh` | the canonical command |
+
+**The pin is the sha of the commit that contains all of them.** A sha covers files the
+list forgets — including a new `conftest.py` in a subdirectory.
+
+## Procedure
+
+```bash
+# 0. every lane's tests are back in the compose tree, at the pre-implementation commit C0
+git log --oneline -1                      # == C0
+
+# 1. the whole suite, once, as a whole
+./gate/run-tests.sh || true               # every new test must fail, for its stated reason
+./gate/run-tests.sh --collect-only -q     # zero collection errors, no duplicate node ids
+
+# 2. reject lanes per docs/03 (vacuous green, out of scope, no red record, unstated tolerance)
+
+# 3. freeze
+git add tests conftest.py pyproject.toml gate/run-tests.sh
+git commit -m "(test): freeze spec <id> — tests for R1..R3, red at C0"
+PIN=$(git rev-parse HEAD)
+```
+
+The commit message states the rows. A test commit that does not name rows is not a
+freeze, it is a pile of tests.
+
+## The gate
+
+```bash
+./gate/lock-check.sh "$PIN"
+```
+
+- exit `0` — the frozen surface is byte-identical to the pin
+- exit `1` — drift; prints the offending paths and the diff
+- exit `2` — usage error (bad pin, pin not an ancestor, no lock paths at the pin)
+
+Run it in the build lanes' exit path and in the composed gate. A drift is a **refusal**,
+never a warning: a warning is a green run with a footnote, which is the failure mode this
+whole document exists to prevent.
+
+## Amendments
+
+A locked test may change. It may not change *silently*, and it may not change inside a
+build lane. The only legal path:
+
+1. A commit authored by the human, whose message states **the spec changed** and why.
+2. A new pin. The old pin stays in the ledger row's history.
+3. The build lane rebases onto the new pin.
+
+Without this path, "locked" means "frozen wrong", and the build lane's only honest move
+is to stop. Say that in the build prompt: stopping is a valid outcome; implementing
+against a wrong test is not.
+
+## What the pin does not cover
+
+- **Behaviour outside the suite.** The pin freezes what the tests claim, not whether the
+  claims are sufficient. Completeness is the ledger's job (`docs/06`).
+- **Claims that no test can discharge** — semantic equivalence of a transformed program,
+  timing envelopes measured on hardware, anything asserted about a different machine.
+  Those rows cannot be `proved` by a green suite, whatever the pin says.
