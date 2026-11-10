@@ -174,6 +174,25 @@ esac
 printf '\ndef %s(a, b):\n    return a %s b\n' "$sym" "$op" >>"$wt/$scope"
 printf 'import os\n' >"$wt/src/outside.py"
 SH
+# Build lane for a merged lane: writes one file per row, in the order the rows appear,
+# taken from the union scope. A merged lane's rows share an interface, so the second
+# row's module needs the first row's — which is why they cannot be separate worktrees.
+cat >"$STUB/build-lane" <<'SH'
+#!/usr/bin/env bash
+wt="$1"; task="$2"
+scope="$(sed -n 's/^Write scope: //p' "$task" | head -1)"
+i=0
+while IFS= read -r row; do
+	[ -n "$row" ] || continue
+	case "$row" in
+	R1) sym=add; op='+' ;;
+	*) sym=sub; op='-' ;;
+	esac
+	i=$((i + 1))
+	file="$(printf '%s' "$scope" | awk -v n="$i" '{print $n}')"
+	printf '\ndef %s(a, b):\n    return a %s b\n' "$sym" "$op" >>"$wt/$file"
+done < <(sed -n 's/^Row: //p' "$task")
+SH
 chmod +x "$STUB"/*
 
 echo "barrier selftest"
@@ -251,7 +270,7 @@ ok "the drift refusal leaves a record behind" \
 "$WAVE" build --ledger "$LEDGER" --level L3 --pin "$PIN" --confirm --width 1 \
 	--root "$WT/scope" --child "$STUB/build-outside" >"$REPO/b2.txt" 2>&1 || true
 ok "a build lane that writes outside its sources is refused" \
-	"$(grep -q 'wrote outside the row sources: src/outside.py' "$REPO/b2.txt" && echo 1)" "$(cat "$REPO/b2.txt")"
+	"$(grep -q 'wrote outside the lane sources: src/outside.py' "$REPO/b2.txt" && echo 1)" "$(cat "$REPO/b2.txt")"
 
 # A row with no `sources` column, and a row whose sources name the lock surface.
 LEDGER_NOSCOPE="$REPO/ledger-noscope.md"
@@ -328,6 +347,56 @@ ok "a directory source with a trailing slash accepts writes under it" \
 	"$(grep -qE '^R1[[:space:]]+ok' "$REPO/c1.txt" && echo 1)" "$(cat "$REPO/c1.txt")"
 ok "the composed gate refuses while another row is still unimplemented" \
 	"$(grep -q 'the composed suite is red' "$REPO/c1.txt" && echo 1)" "$(cat "$REPO/c1.txt")"
+
+# --- rows that share an interface are one lane --------------------------------
+# R1 and R2 cannot be separate worktrees: R2's module imports R1's. The partition table
+# in the ledger says so, and build must obey the artifact instead of spawning one lane
+# per row (docs/02 rule 2).
+LEDGER_GROUP="$REPO/ledger-group.md"
+ledger "$LEDGER_GROUP" '| R1 | L3 | add(a,b) returns a+b | direct sum | none | src/app.py | tests/test_R1.py::test_add | ./gate/run-tests.sh | proved |
+| R2 | L3 | sub(a,b) returns a-b | direct difference | none | src/math.py | tests/test_R2.py::test_sub | ./gate/run-tests.sh | proved |'
+cat >>"$LEDGER_GROUP" <<'MD'
+
+## Lane partition
+
+| lane | rows | write scope |
+| --- | --- | --- |
+| L3-a | R1, R2 | src/app.py, src/math.py |
+MD
+"$WAVE" build --ledger "$LEDGER_GROUP" --level L3 --pin "$PIN" --confirm --width 2 \
+	--root "$WT/group" --child "$STUB/build-lane" --no-records >"$REPO/d1.txt" 2>&1 || true
+ok "the partition table merges the two rows into one lane" \
+	"$(grep -qE 'L3-a: rows R1,R2' "$REPO/d1.txt" && echo 1)" "$(cat "$REPO/d1.txt")"
+ok "a merged lane gets one worktree, named for the lane" \
+	"$([ -d "$WT/group/L3-a" ] && [ ! -d "$WT/group/R1" ] && echo 1)"
+ok "the merged lane's task file carries both rows" \
+	"$([ "$(grep -c '^Row: ' "$WT/group/L3-a.task" || true)" -eq 2 ] && echo 1)"
+ok "both rows in the merged lane go green" \
+	"$([ "$(grep -cE '^R[0-9]+[[:space:]]+ok[[:space:]]' "$REPO/d1.txt" || true)" -eq 2 ] && echo 1)" "$(cat "$REPO/d1.txt")"
+ok "the merged lane's composed gate goes green" \
+	"$(grep -q 'composed gate green' "$REPO/d1.txt" && echo 1)"
+
+# A row named by two lanes is a partition error, not a merge.
+LEDGER_TWICE="$REPO/ledger-twice.md"
+ledger "$LEDGER_TWICE" '| R1 | L3 | add(a,b) returns a+b | direct sum | none | src/app.py | tests/test_R1.py::test_add | ./gate/run-tests.sh | proved |
+| R2 | L3 | sub(a,b) returns a-b | direct difference | none | src/math.py | tests/test_R2.py::test_sub | ./gate/run-tests.sh | proved |'
+cat >>"$LEDGER_TWICE" <<'MD'
+
+## Lane partition
+
+| lane | rows | write scope |
+| --- | --- | --- |
+| L3-a | R1, R2 | src/app.py |
+| L3-b | R2 | src/math.py |
+MD
+if "$WAVE" build --ledger "$LEDGER_TWICE" --level L3 --pin "$PIN" --confirm --width 1 \
+	--root "$WT/twice" --child "$STUB/build-lane" --no-records >"$REPO/d2.txt" 2>&1; then
+	ok "a row listed in two lanes is a usage error" 0
+else
+	ok "a row listed in two lanes is a usage error" 1
+fi
+ok "the double-listing refusal names the row" \
+	"$(grep -q 'row R2 is listed in 2 lanes' "$REPO/d2.txt" && echo 1)" "$(cat "$REPO/d2.txt")"
 
 # --- the pin is a wall, not a suggestion --------------------------------------
 # A later build cannot silently widen the frozen surface: lock-check is what makes the

@@ -700,11 +700,30 @@ sysdv_cmd() {
 }
 
 # --- wave 2: build lanes against the pin -----------------------------------
-# A build lane cannot be green on the whole suite: every lane starts at the pin, where
+# A lane is one worktree and one write scope, and it holds one or more rows. The
+# partition table in the ledger (docs/02) decides the grouping: rows whose interfaces are
+# not disjoint are ONE lane, because no two worktrees can satisfy them independently — a
+# parser cannot be green without the tokenizer it imports. A row the table does not name
+# is its own lane.
+#
+# A lane also cannot be green on the whole suite: every lane starts at the pin, where
 # every row's tests exist and the ones it does not own are still red. So the lane's own
-# check selects the row's tests (`-k`), and the composed gate — run once, with no
+# check selects the lane's tests (`-k`), and the composed gate — run once, with no
 # selection — is the only whole-suite green. That distinction is the V: lanes are
 # row-scoped, the delivery claim is not.
+
+lane_groups() { # lane_groups <ledger> -> "lane<TAB>rows" from the partition table
+	local ledger="$1"
+	awk -F'|' "$AWK_HELPERS"'
+		/^\|[ ]*lane[ ]*\|/ && !hdr { header(); next }
+		hdr && !/^\|/ { exit }
+		hdr && /^\|[ ]*-+/ { next }
+		hdr && /^\|/ {
+			if (cell("lane") != "" && cell("rows") != "") printf "%s\t%s\n", cell("lane"), cell("rows")
+		}
+	' "$ledger"
+}
+
 row_test_selection() { # row_test_selection <ledger> <id> -> -k expression, or empty
 	local tests_raw
 	tests_raw="$(row_field "$1" "$2" tests)"
@@ -728,102 +747,139 @@ row_test_selection() { # row_test_selection <ledger> <id> -> -k expression, or e
 	printf '%s' "$out"
 }
 
-run_build_lane() {
-	local id="$1" ledger="$2" pin="$3" root="$4" child="${5:-}" records="${6:-}"
-	local wt="$root/$id" log="$root/$id.log"
-	local requirement design interface tests sources_raw selection
-	requirement="$(row_field "$ledger" "$id" requirement)"
-	design="$(row_field "$ledger" "$id" design)"
-	interface="$(row_field "$ledger" "$id" interface)"
-	tests="$(row_field "$ledger" "$id" tests)"
-	sources_raw="$(row_field "$ledger" "$id" sources)"
-	selection="$(row_test_selection "$ledger" "$id")"
+row_sources() { # row_sources <ledger> <id> -> one path per line, no trailing slash
+	local raw
+	raw="$(row_field "$1" "$2" sources)"
+	[ -n "$raw" ] || return 0
+	printf '%s\n' "$raw" | tr ',' '\n' | tr -s '[:space:]' '\n' | sed 's:/$::' | sed '/^$/d'
+}
 
-	# `sources` is the plan -> build contract: the row's source paths, comma or space
-	# separated. An empty cell is not "everything" — it is a row nobody scoped, and a
-	# lane with no wall is the cheapest route to a green that measured nothing.
+lane_ids() { # lane_ids <ids-csv> -> one id per line
+	# The trailing newline is load-bearing: with no comma in the cell, `tr` emits no
+	# newline and `read` returns nonzero at EOF without a delimiter, so the loop body
+	# would never run and every lane would look empty.
+	printf '%s\n' "$1" | tr ',' '\n' | tr -s '[:space:]' '\n' | sed '/^$/d'
+}
+
+# lane_fail <ids-csv> <status> <message>
+# One result line per row: a lane's failure is each of its rows' failure, and the trail
+# must say so rather than leaving the other rows looking untouched.
+lane_fail() {
+	local r
+	while IFS= read -r r; do
+		[ -n "$r" ] || continue
+		printf '%s\t%s\t%s\n' "$r" "$2" "$3"
+	done < <(lane_ids "$1")
+}
+
+run_build_lane() { # run_build_lane <lane> <ids-csv> <ledger> <pin> <root> <child> <records>
+	local lane="$1" csv="$2" ledger="$3" pin="$4" root="$5" child="${6:-}" records="${7:-}"
+	local wt="$root/$lane" log="$root/$lane.log"
+	local -a rowids=()
+	local r s x sel
+	while IFS= read -r r; do [ -n "$r" ] && rowids+=("$r"); done < <(lane_ids "$csv")
+
+	# The lane's write scope is the union of its rows' sources and its check is the union
+	# of its rows' tests. Both are refusals, not warnings: a lane that does not know what
+	# it may write has no wall at all (docs/05).
 	local -a sources=()
-	local s
-	# A trailing newline is not decoration: `tr ',' '\n'` emits no newline when the
-	# cell has no comma, and `read` returns nonzero at EOF without a delimiter — the
-	# loop body would never run and every row would look unscoped.
-	while IFS= read -r s; do
-		[ -n "$s" ] || continue
-		# A directory is written `src/runtime/` in the ledger; the prefix match below
-		# needs it without the trailing slash.
-		s="${s%/}"
-		[ -n "$s" ] && sources+=("$s")
-	done < <(
-		printf '%s\n' "$sources_raw" | tr ',' '\n' | tr -s '[:space:]' '\n' | sed '/^$/d'
-	)
-	if [ "${#sources[@]}" -eq 0 ]; then
-		printf '%s\trefused\tno sources column — the row names no write scope, so the lane has no wall (docs/05)\n' "$id"
-		return 1
-	fi
-	for s in "${sources[@]}"; do
-		if is_lock_path "$s"; then
-			printf '%s\trefused\tsources include the frozen surface (%s) — a build lane never edits a locked test\n' "$id" "$s"
+	local all_sel="" sel_sep=""
+	for r in "${rowids[@]}"; do
+		local src_raw dup
+		src_raw="$(row_sources "$ledger" "$r")"
+		if [ -z "$src_raw" ]; then
+			lane_fail "$csv" refused "no sources column — row $r names no write scope, so the lane has no wall (docs/05)"
 			return 1
+		fi
+		while IFS= read -r s; do
+			[ -n "$s" ] || continue
+			if is_lock_path "$s"; then
+				lane_fail "$csv" refused "sources include the frozen surface ($s) — a build lane never edits a locked test"
+				return 1
+			fi
+			dup=0
+			for x in ${sources[@]+"${sources[@]}"}; do
+				[ "$x" = "$s" ] && dup=1
+			done
+			if [ "$dup" = 0 ]; then sources+=("$s"); fi
+		done <<<"$src_raw"
+		sel="$(row_test_selection "$ledger" "$r")"
+		if [ -n "$sel" ]; then
+			all_sel="$all_sel$sel_sep$sel"
+			sel_sep=" or "
 		fi
 	done
 
 	worktree_add "$wt" "$pin" "$log" || {
-		printf '%s\trefused\tworktree add at %s failed (see %s)\n' "$id" "${pin:0:12}" "$log"
+		lane_fail "$csv" refused "worktree add at ${pin:0:12} failed (see $log)"
 		return 1
 	}
 	[ -e "$wt/.git" ] || {
-		printf '%s\trefused\tworktree add reported success but %s is not a worktree\n' "$id" "$wt"
+		lane_fail "$csv" refused "worktree add reported success but $wt is not a worktree"
 		return 1
 	}
 
 	{
-		printf 'Row: %s\n\nRequirement: %s\n\nDesign: %s\n\nInterface: %s\n\n' \
-			"$id" "$requirement" "$design" "$interface"
-		[ -n "$tests" ] && printf 'Frozen tests (locked, must not be edited): %s\n\n' "$tests"
-		if [ -n "$selection" ]; then
-			printf 'Your lane check (this row only): ./gate/run-tests.sh -k "%s"\n' "$selection"
-			printf 'Other rows are still red at this pin. That is expected; do not implement them.\n\n'
-		else
-			printf 'This row names no tests (a structural row): the composed gate is its only check.\n\n'
-		fi
+		printf 'Lane: %s — %s row(s)\n\n' "$lane" "${#rowids[@]}"
+		for r in "${rowids[@]}"; do
+			printf 'Row: %s\n\nRequirement: %s\n\nDesign: %s\n\nInterface: %s\n\n' \
+				"$r" \
+				"$(row_field "$ledger" "$r" requirement)" \
+				"$(row_field "$ledger" "$r" design)" \
+				"$(row_field "$ledger" "$r" interface)"
+			local t red
+			t="$(row_field "$ledger" "$r" tests)"
+			[ -n "$t" ] && printf 'Frozen tests (locked, must not be edited): %s\n\n' "$t"
+			red="$(latest_record_line "$records" "$r" red_recorded)"
+			[ -n "$red" ] && printf 'Recorded red run for %s:\n%s\n\n' "$r" "$red"
+		done
+		# The label is stable on purpose: it is the contract a lane reads, and the
+		# stubs in gate/test-barrier.sh parse it.
 		printf 'Write scope: %s\n' "${sources[*]}"
+		if [ "${#rowids[@]}" -gt 1 ]; then
+			printf 'This scope is the union of the lane rows above; one lane means one worktree\n'
+			printf 'and one build agent, because these rows share an interface (docs/02 rule 2).\n'
+		fi
 		printf 'Locked surface you may not touch: tests/**, conftest.py, pyproject.toml, pytest.ini, tox.ini, setup.cfg, gate/run-tests.sh\n'
 		printf 'Worktree: %s\nYou are at the PIN %s. The suite is red here, and that red is the row.\n\n' "$wt" "$pin"
-		local red
-		red="$(latest_record_line "$records" "$id" red_recorded)"
-		[ -n "$red" ] && printf 'Recorded red run (the failure you must turn green):\n%s\n\n' "$red"
+		if [ -n "$all_sel" ]; then
+			printf 'Your lane check (these rows only): ./gate/run-tests.sh -k "%s"\n' "$all_sel"
+			printf 'Other rows are still red at this pin. That is expected; do not implement them.\n\n'
+		else
+			printf 'These rows name no tests: the composed gate is their only check.\n\n'
+		fi
 		printf 'When a frozen test is wrong, STOP and say which row, which assertion, and what\n'
 		printf 'the spec should say (docs/05 rule 4). Implementing against a wrong test must\n'
 		printf 'never look like success.\n'
-	} >"$root/$id.task"
+	} >"$root/$lane.task"
 
 	if [ -n "$child" ]; then
-		"$child" "$wt" "$root/$id.task" >>"$log" 2>&1 || true
+		"$child" "$wt" "$root/$lane.task" >>"$log" 2>&1 || true
 	else
 		local body
 		body="$(awk 'BEGIN{n=0} /^---$/{n++; next} n>=2' "$BUILD_AGENT_FILE")"
-		[ -n "$body" ] || {
-			printf '%s\trefused\tbuild agent file has no body: %s\n' "$id" "$BUILD_AGENT_FILE"
+		if [ -z "$body" ]; then
+			lane_fail "$csv" refused "build agent file has no body: $BUILD_AGENT_FILE"
 			return 1
-		}
+		fi
 		(cd "$wt" && pi --mode json -p --no-session -ne \
 			--tools read,grep,find,ls,bash,write,edit \
 			--append-system-prompt "$body" \
-			"$(cat "$root/$id.task")") >>"$log" 2>&1 || true
+			"$(cat "$root/$lane.task")") >>"$log" 2>&1 || true
 	fi
 
 	# post-check 1: the frozen surface is byte-identical to the pin. This is the exit
 	# path docs/05 requires, and it runs before anything is said about the diff.
 	if [ ! -x "$wt/gate/lock-check.sh" ]; then
-		printf '%s\trefused\t%s/gate/lock-check.sh missing — the lock check is not optional\n' "$id" "$wt"
+		lane_fail "$csv" refused "$wt/gate/lock-check.sh missing — the lock check is not optional"
 		return 1
 	fi
-	if ! (cd "$wt" && ./gate/lock-check.sh "$pin" >"$root/$id.lock.log" 2>&1); then
-		printf '%s\trefused\tthe frozen surface moved (see %s)\n' "$id" "$root/$id.lock.log"
+	if ! (cd "$wt" && ./gate/lock-check.sh "$pin" >"$root/$lane.lock.log" 2>&1); then
+		lane_fail "$csv" refused "the frozen surface moved (see $root/$lane.lock.log)"
 		return 1
 	fi
 
-	# post-check 2: every write stays inside the row's sources
+	# post-check 2: every write stays inside the lane's sources
 	local outside
 	outside="$(changed_paths "$wt" | while IFS= read -r p; do
 		local inside=1
@@ -833,25 +889,27 @@ run_build_lane() {
 		[ "$inside" = 0 ] || printf '%s\n' "$p"
 	done)"
 	if [ -n "$outside" ]; then
-		printf '%s\trefused\twrote outside the row sources: %s (see %s)\n' \
-			"$id" "$(printf '%s' "$outside" | paste -sd, -)" "$log"
+		lane_fail "$csv" refused "wrote outside the lane sources: $(printf '%s' "$outside" | paste -sd, -) (see $log)"
 		return 1
 	fi
 	if [ -z "$(changed_paths "$wt")" ]; then
-		printf '%s\trefused\twrote nothing — a lane that changes no source has not implemented the row\n' "$id"
+		lane_fail "$csv" refused "wrote nothing — a lane that changes no source has not implemented its rows"
 		return 1
 	fi
 
-	# post-check 3: the row's own tests are green in the lane (the composed gate, which
+	# post-check 3: the lane's own tests are green in the lane (the composed gate, which
 	# runs the whole suite with no selection, comes later).
-	if [ -n "$selection" ]; then
-		if ! (cd "$wt" && ./gate/run-tests.sh -q -k "$selection" >>"$log" 2>&1); then
-			printf "%s\tfailed\tthe row's tests are still red at the pin (see %s)\n" "$id" "$log"
+	if [ -n "$all_sel" ]; then
+		if ! (cd "$wt" && ./gate/run-tests.sh -q -k "$all_sel" >>"$log" 2>&1); then
+			lane_fail "$csv" failed "the lane's tests are still red at the pin (see $log)"
 			return 1
 		fi
 	fi
 
-	printf '%s\tok\tgreen at pin %s\n' "$id" "${pin:0:12}"
+	while IFS= read -r r; do
+		[ -n "$r" ] || continue
+		printf '%s\tok\tgreen at pin %s\n' "$r" "${pin:0:12}"
+	done < <(lane_ids "$csv")
 }
 
 build_cmd() {
@@ -895,10 +953,46 @@ build_cmd() {
 	done < <(rows_cmd "$ledger")
 	[ "${#ids[@]}" -gt 0 ] || die "no rows at level $level in $ledger"
 
-	printf 'wave: build level %s, pin %s, %s row(s), width %s\n' \
-		"$level" "${pin:0:12}" "${#ids[@]}" "$width"
+	# Group the rows into lanes (docs/02 rule 2). A row named by the partition table
+	# belongs to that lane; a row named by two lanes is a partition error.
+	local -a lane_names=() lane_rows=()
+	local gl gr kept r n covered
+	while IFS=$'\t' read -r gl gr; do
+		[ -n "$gl" ] || continue
+		kept=""
+		while IFS= read -r r; do
+			[ -n "$r" ] || continue
+			for n in "${ids[@]}"; do
+				if [ "$n" = "$r" ]; then
+					case ",$kept," in
+					*",$r,"*) ;;
+					*) kept="$kept${kept:+,}$r" ;;
+					esac
+				fi
+			done
+		done < <(lane_ids "$gr")
+		[ -n "$kept" ] || continue
+		lane_names+=("$gl")
+		lane_rows+=("$kept")
+	done < <(lane_groups "$ledger")
 	for id in "${ids[@]}"; do
-		printf '  %s  sources: %s\n' "$id" "$(row_field "$ledger" "$id" sources)"
+		covered=0
+		for n in ${lane_rows[@]+"${lane_rows[@]}"}; do
+			case ",$n," in *",$id,"*) covered=$((covered + 1)) ;; esac
+		done
+		[ "$covered" -le 1 ] ||
+			die "row $id is listed in $covered lanes in the partition table — a row belongs to one lane"
+		if [ "$covered" = 0 ]; then
+			lane_names+=("$id")
+			lane_rows+=("$id")
+		fi
+	done
+
+	printf 'wave: build level %s, pin %s, %s row(s) in %s lane(s), width %s\n' \
+		"$level" "${pin:0:12}" "${#ids[@]}" "${#lane_names[@]}" "$width"
+	local i
+	for i in "${!lane_names[@]}"; do
+		printf '  %s: rows %s\n' "${lane_names[$i]}" "${lane_rows[$i]}"
 	done
 	if [ "$dry" = 1 ]; then return 0; fi
 	[ "$confirm" = 1 ] || confirm_required build "$level" "${#ids[@]}"
@@ -908,66 +1002,78 @@ build_cmd() {
 	printf 'wave: worktrees under %s\n' "$root"
 
 	local running=0
-	for id in "${ids[@]}"; do
+	for i in "${!lane_names[@]}"; do
 		while [ "$running" -ge "$width" ]; do
 			wait -n || true
 			running=$((running - 1))
 		done
-		(run_build_lane "$id" "$ledger" "$pin" "$root" "$child" "$records" >"$root/$id.result" 2>&1) &
+		(run_build_lane "${lane_names[$i]}" "${lane_rows[$i]}" "$ledger" "$pin" \
+			"$root" "$child" "$records" >"$root/${lane_names[$i]}.result" 2>&1) &
 		running=$((running + 1))
 	done
 	wait || true
 
-	local fails=0 ok=0 detail
-	local -a green_ids=()
-	for id in "${ids[@]}"; do
-		if [ -s "$root/$id.result" ]; then
-			cat "$root/$id.result"
-			detail="$(head -1 "$root/$id.result" | cut -f3-)"
-			if grep -q "	ok	" "$root/$id.result"; then
+	local fails=0 ok=0 detail row_ok
+	local -a green_lanes=()
+	for i in "${!lane_names[@]}"; do
+		local lane="${lane_names[$i]}" rows="${lane_rows[$i]}"
+		if [ -s "$root/$lane.result" ]; then
+			cat "$root/$lane.result"
+		else
+			printf '%s\tfailed\tno result (subshell died)\n' "$lane"
+		fi
+		row_ok=1
+		while IFS= read -r r; do
+			[ -n "$r" ] || continue
+			detail="$(grep -E "^${r}[[:space:]]" "$root/$lane.result" 2>/dev/null | head -1 | cut -f3-)"
+			[ -n "$detail" ] || detail="no result (subshell died)"
+			if grep -qE "^${r}[[:space:]]+ok([[:space:]]|$)" "$root/$lane.result" 2>/dev/null; then
 				ok=$((ok + 1))
-				green_ids+=("$id")
-				changed_paths "$root/$id" >"$root/$id.paths"
-				rec_append "$records" build built_green "$id" "$ledger" \
-					"$(row_field "$ledger" "$id" tests)" "$(paths_json "$root/$id.paths")" \
-					",\"base\":\"$pin\",\"pin\":\"$pin\""
+				changed_paths "$root/$lane" >"$root/$lane.paths" 2>/dev/null || : >"$root/$lane.paths"
+				rec_append "$records" build built_green "$r" "$ledger" \
+					"$(row_field "$ledger" "$r" tests)" "$(paths_json "$root/$lane.paths")" \
+					",\"base\":\"$pin\",\"pin\":\"$pin\",\"lane\":\"$lane\""
 			else
 				fails=$((fails + 1))
-				rec_append "$records" build refused "$id" "$ledger" \
-					"$(row_field "$ledger" "$id" tests)" "[]" \
-					",\"base\":\"$pin\",\"pin\":\"$pin\",\"detail\":\"$(json_escape "$detail")\""
+				row_ok=0
+				rec_append "$records" build refused "$r" "$ledger" \
+					"$(row_field "$ledger" "$r" tests)" "[]" \
+					",\"base\":\"$pin\",\"pin\":\"$pin\",\"lane\":\"$lane\",\"detail\":\"$(json_escape "$detail")\""
 			fi
-		else
-			printf '%s\tfailed\tno result (subshell died)\n' "$id"
-			fails=$((fails + 1))
-		fi
+		done < <(lane_ids "$rows")
+		if [ "$row_ok" = 1 ]; then green_lanes+=("$lane"); fi
 	done
-	printf 'wave: %s/%s lanes ok, %s failed\n' "$ok" "${#ids[@]}" "$fails"
+	printf 'wave: %s/%s rows ok in %s/%s lane(s), %s row(s) failed\n' \
+		"$ok" "${#ids[@]}" "${#green_lanes[@]}" "${#lane_names[@]}" "$fails"
 
 	# The composed gate. Green per lane is the classic integration failure: each lane's
 	# tests are consistent with that lane's assumptions, and the composed tree is the
 	# first place the assumptions meet (docs/02). It runs once, serially, and it is the
 	# only run that supports the delivery claim.
-	if [ "${#green_ids[@]}" -gt 0 ]; then
+	if [ "${#green_lanes[@]}" -gt 0 ]; then
 		if [ "$fails" -gt 0 ]; then
-			printf 'wave: composed gate skipped — %s lane(s) did not go green\n' "$fails" >&2
+			printf 'wave: composed gate skipped — %s row(s) did not go green\n' "$fails" >&2
 		else
 			local compose="$root/compose"
-			for id in "${green_ids[@]}"; do
-				lane_prepare "$root" "$id" "$root/$id" "$pin" ||
-					refuse "lane $id produced no patch at the pin"
+			for i in "${!green_lanes[@]}"; do
+				lane_prepare "$root" "${green_lanes[$i]}" "$root/${green_lanes[$i]}" "$pin" ||
+					refuse "lane ${green_lanes[$i]} produced no patch at the pin"
 			done
-			compose_apply "$root" "$compose" "$pin" "${green_ids[@]}"
+			compose_apply "$root" "$compose" "$pin" "${green_lanes[@]}"
 			if ! (cd "$compose" && ./gate/lock-check.sh "$pin" >"$root/gate-lock.log" 2>&1); then
 				refuse "the composed tree drifted from the pin (see $root/gate-lock.log)"
 			fi
 			if ! (cd "$compose" && ./gate/run-tests.sh -q >"$root/gate-composed.log" 2>&1); then
 				refuse "the composed suite is red — green per lane is not green composed (see $root/gate-composed.log)"
 			fi
-			for id in "${green_ids[@]}"; do
-				rec_append "$records" gate gate_green "$id" "$ledger" \
-					"$(row_field "$ledger" "$id" tests)" "$(paths_json "$root/$id.paths")" \
-					",\"base\":\"$pin\",\"pin\":\"$pin\""
+			for i in "${!green_lanes[@]}"; do
+				local glane="${green_lanes[$i]}"
+				while IFS= read -r r; do
+					[ -n "$r" ] || continue
+					rec_append "$records" gate gate_green "$r" "$ledger" \
+						"$(row_field "$ledger" "$r" tests)" "$(paths_json "$root/$glane.paths")" \
+						",\"base\":\"$pin\",\"pin\":\"$pin\",\"lane\":\"$glane\""
+				done < <(lane_ids "${lane_rows[$i]}")
 			done
 			printf 'wave: composed gate green at pin %s\n' "${pin:0:12}"
 		fi
