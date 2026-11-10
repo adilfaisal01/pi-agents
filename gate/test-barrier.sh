@@ -223,6 +223,8 @@ ok "the pin is a child of the pre-implementation commit" \
 ok "the freeze commit names the rows it freezes" \
 	"$(git -C "$REPO" log -1 --format=%s "$PIN" | grep -q 'R1,R2' && echo 1)" \
 	"$(git -C "$REPO" log -1 --format=%s "$PIN")"
+ok "the pin is anchored by a ref, so a temp-dir cleanup cannot collect it" \
+	"$([ "$(git -C "$REPO" rev-parse "refs/vmodel/pins/L3-${PIN:0:12}" 2>/dev/null || true)" = "$PIN" ] && echo 1)"
 ok "the pin covers the canonical command" \
 	"$(git -C "$REPO" cat-file -e "$PIN:gate/run-tests.sh" 2>/dev/null && echo 1)"
 ok "lock-check is clean at the pin" \

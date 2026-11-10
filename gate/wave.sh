@@ -588,6 +588,11 @@ freeze_cmd() {
 	fi
 	local pin
 	pin="$(git -C "$root/compose" rev-parse HEAD)"
+	# The pin lives on a detached worktree under a temp directory. A ref is what keeps it
+	# reachable: without one, cleaning $TMPDIR leaves the commit unreferenced and a later
+	# `git gc` collects the frozen spec out of existence (the sha in the ledger would then
+	# resolve to nothing). The ref also gives the human a name to land.
+	git update-ref "refs/vmodel/pins/${level}-${pin:0:12}" "$pin"
 
 	if [ -z "$records" ] && [ "$no_records" != 1 ]; then records="$(records_default "$ledger")"; fi
 	for id in "${ids[@]}"; do
@@ -598,6 +603,7 @@ freeze_cmd() {
 
 	printf 'wave: frozen %s at level %s\n' "$(printf '%s' "${ids[*]}" | tr ' ' ',')" "$level"
 	printf 'wave: %s\n' "$message"
+	printf 'wave: pin ref refs/vmodel/pins/%s-%s\n' "$level" "${pin:0:12}"
 	printf '%s\n' "$pin"
 }
 

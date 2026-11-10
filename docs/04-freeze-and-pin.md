@@ -87,6 +87,33 @@ Run it in the build lanes' exit path and in the composed gate. A drift is a **re
 never a warning: a warning is a green run with a footnote, which is the failure mode this
 whole document exists to prevent.
 
+## Landing the pin
+
+The freeze commit is created on a **detached worktree** under the wave root, and the wave
+root is a temp directory. Two consequences, both the human's:
+
+1. **The pin is anchored by a ref.** `freeze` runs
+   `git update-ref refs/vmodel/pins/<level>-<pin12> <pin>`, so cleaning `$TMPDIR` cannot
+   leave the commit unreferenced and let a later `git gc` collect the frozen spec out of
+   existence. The ref is also the name to land from.
+2. **The tests reach `main` by a merge.** The apparatus does not commit anything to your
+   branch — `docs/DECISIONS #2`: scripts certify, the human judges. Landing is:
+
+```bash
+git merge --no-ff "$(git rev-parse refs/vmodel/pins/L3-638fa694ef8a)" \
+	-m "test: land the frozen L3 spec (pin 638fa69)"
+```
+
+Land the pin **before** amending the ledger, or `main` and the pin diverge and the merge
+stops being a fast-forward. Nothing breaks when they diverge — the pin is still an
+ancestor-or-sibling commit that `lock-check.sh` can verify — but a merge commit is noise
+the human has to explain later.
+
+The build half is the same shape and the same rule: `build` applies each lane's diff to
+`<root>/compose` and runs the composed gate there, but it **never commits**. Committing
+the implementation is the moment a human says "this is what satisfies the row", which is
+exactly the judgement the apparatus is built to leave in place.
+
 ## Amendments
 
 A locked test may change. It may not change *silently*, and it may not change inside a
