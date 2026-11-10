@@ -99,8 +99,8 @@ ok "levels are emitted bottom-up (L3 before L2)" \
 	"$("$WAVE" levels "$LEDGER" | paste -sd, -)"
 
 # --- a level selects only its rows, and runs them in parallel ------------------
-"$WAVE" sysdv --ledger "$LEDGER" --level L3 --base "$BASE" --width 2 \
-	--root "$WTROOT/a" --child "$STUB_DIR/good" >"$REPO/out-a.txt" 2>&1 || true
+"$WAVE" sysdv --ledger "$LEDGER" --level L3 --base "$BASE" --width 2 --confirm \
+	--root "$WTROOT/a" --child "$STUB_DIR/good" --no-records >"$REPO/out-a.txt" 2>&1 || true
 ok "both L3 lanes pass" "$([ "$(grep -c '	ok	' "$REPO/out-a.txt" || true)" -eq 2 ] && echo 1)" "$(cat "$REPO/out-a.txt")"
 ok "the L2 row is not run in an L3 wave" "$(! grep -q '^R3' "$REPO/out-a.txt" && echo 1)"
 ok "each lane got its own worktree" "$([ -d "$WTROOT/a/R1/tests" ] && [ -d "$WTROOT/a/R2/tests" ] && echo 1)"
@@ -108,25 +108,35 @@ ok "worktrees are detached at the base commit" \
 	"$([ -f "$WTROOT/a/R1/.git" ] && [ "$(git -C "$WTROOT/a/R1" rev-parse HEAD)" = "$BASE" ] && echo 1)"
 
 # --- refusals -----------------------------------------------------------------
-"$WAVE" sysdv --ledger "$LEDGER" --level L3 --base "$BASE" --width 1 \
-	--root "$WTROOT/b" --child "$STUB_DIR/out-of-scope" >"$REPO/out-b.txt" 2>&1 || true
+"$WAVE" sysdv --ledger "$LEDGER" --level L3 --base "$BASE" --width 1 --confirm \
+	--root "$WTROOT/b" --child "$STUB_DIR/out-of-scope" --no-records >"$REPO/out-b.txt" 2>&1 || true
 ok "a write outside tests/ is refused" "$(grep -q 'wrote outside scope: src/helper.py' "$REPO/out-b.txt" && echo 1)" "$(cat "$REPO/out-b.txt")"
 
-"$WAVE" sysdv --ledger "$LEDGER" --level L3 --base "$BASE" --width 1 \
-	--root "$WTROOT/c" --child "$STUB_DIR/no-test" >"$REPO/out-c.txt" 2>&1 || true
+"$WAVE" sysdv --ledger "$LEDGER" --level L3 --base "$BASE" --width 1 --confirm \
+	--root "$WTROOT/c" --child "$STUB_DIR/no-test" --no-records >"$REPO/out-c.txt" 2>&1 || true
 ok "a lane that wrote nothing is refused" "$(grep -q 'no test was created' "$REPO/out-c.txt" && echo 1)" "$(cat "$REPO/out-c.txt")"
 
-"$WAVE" sysdv --ledger "$LEDGER" --level L3 --base "$BASE" --width 1 \
-	--root "$WTROOT/d" --child "$STUB_DIR/green" >"$REPO/out-d.txt" 2>&1 || true
+"$WAVE" sysdv --ledger "$LEDGER" --level L3 --base "$BASE" --width 1 --confirm \
+	--root "$WTROOT/d" --child "$STUB_DIR/green" --no-records >"$REPO/out-d.txt" 2>&1 || true
 ok "a green-at-base lane is refused as vacuous" "$(grep -q 'GREEN at' "$REPO/out-d.txt" && echo 1)" "$(cat "$REPO/out-d.txt")"
 
 # --- a failing wave exits nonzero --------------------------------------------
-if "$WAVE" sysdv --ledger "$LEDGER" --level L3 --base "$BASE" --width 1 \
-	--root "$WTROOT/e" --child "$STUB_DIR/green" >/dev/null 2>&1; then
+if "$WAVE" sysdv --ledger "$LEDGER" --level L3 --base "$BASE" --width 1 --confirm \
+	--root "$WTROOT/e" --child "$STUB_DIR/green" --no-records >/dev/null 2>&1; then
 	ok "a wave with a failed lane exits nonzero" 0
 else
 	ok "a wave with a failed lane exits nonzero" 1
 fi
+
+# --- spawning lanes requires the human's confirmation -------------------------
+if "$WAVE" sysdv --ledger "$LEDGER" --level L3 --base "$BASE" --width 1 \
+	--root "$WTROOT/f" --child "$STUB_DIR/good" --no-records >"$REPO/out-f.txt" 2>&1; then
+	ok "sysdv without --confirm is refused" 0
+else
+	ok "sysdv without --confirm is refused" 1
+fi
+ok "a refused spawn creates no lane worktree" "$([ ! -d "$WTROOT/f/R1" ] && echo 1)"
+ok "the refusal names the confirmation rule" "$(grep -q 'confirmed by the human' "$REPO/out-f.txt" && echo 1)"
 
 # --- argument guards ----------------------------------------------------------
 if "$WAVE" sysdv --ledger "$LEDGER" --level L9 --base "$BASE" >/dev/null 2>&1; then

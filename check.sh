@@ -12,6 +12,7 @@ RUN_TYPES=1
 echo "== gate =="
 ./gate/test-lock-check.sh
 ./gate/test-wave.sh
+./gate/test-barrier.sh
 
 TYPED=0
 if [ "$RUN_TYPES" = 1 ]; then
