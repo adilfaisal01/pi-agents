@@ -924,7 +924,9 @@ run_build_lane() { # run_build_lane <lane> <ids-csv> <ledger> <pin> <root> <chil
 		return 1
 	fi
 	if [ -z "$(changed_paths "$wt")" ]; then
-		lane_fail "$csv" refused "wrote nothing — a lane that changes no source has not implemented its rows"
+		# A lane that stops on a wrong spec writes nothing on purpose. Its report is the
+		# artifact, so the refusal points at it rather than implying the lane did nothing.
+		lane_fail "$csv" refused "wrote nothing — see the lane report in $log (a lane that stops on a wrong spec is a finding, not a failure)"
 		return 1
 	fi
 
