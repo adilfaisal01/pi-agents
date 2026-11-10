@@ -294,6 +294,20 @@ if bad:
 PY
 }
 
+# worktree_add <worktree> <commit> <logfile>
+# A wave root is a temp directory, and deleting it between runs leaves the worktree
+# registered but missing; `git worktree add` then fails with "missing but already
+# registered". Pruning clears only registrations whose directory is gone, so it is
+# always safe to run first — and the retry covers a stale directory that still exists.
+worktree_add() {
+	local wt="$1" c="$2" log="$3"
+	git worktree prune 2>/dev/null || true
+	if git worktree add -q --detach "$wt" "$c" 2>>"$log"; then return 0; fi
+	git worktree remove --force "$wt" 2>/dev/null || true
+	git worktree prune 2>/dev/null || true
+	git worktree add -q --detach "$wt" "$c" 2>>"$log"
+}
+
 # --- one lane --------------------------------------------------------------
 run_lane() {
 	local id="$1" ledger="$2" base="$3" root="$4" child="${5:-}"
@@ -305,7 +319,7 @@ run_lane() {
 	interface="$(row_field "$ledger" "$id" interface)"
 	tests="$(row_field "$ledger" "$id" tests)"
 
-	git worktree add -q --detach "$wt" "$base" 2>>"$log" || {
+	worktree_add "$wt" "$base" "$log" || {
 		printf '%s\tfailed\tworktree add at %s failed (see %s)\n' "$id" "${base:0:12}" "$log"
 		return 1
 	}
@@ -423,7 +437,7 @@ compose_apply() { # compose_apply <root> <compose-dir> <commit> <id>...
 	fi
 
 	if [ ! -e "$compose/.git" ]; then
-		git worktree add -q --detach "$compose" "$base" 2>/dev/null ||
+		worktree_add "$compose" "$base" "$root/compose.log" ||
 			refuse "could not create the compose worktree at $compose"
 	fi
 	if [ -n "$(git -C "$compose" status --porcelain -uall 2>/dev/null)" ]; then
@@ -722,7 +736,7 @@ run_build_lane() {
 		fi
 	done
 
-	git worktree add -q --detach "$wt" "$pin" 2>>"$log" || {
+	worktree_add "$wt" "$pin" "$log" || {
 		printf '%s\trefused\tworktree add at %s failed (see %s)\n' "$id" "${pin:0:12}" "$log"
 		return 1
 	}

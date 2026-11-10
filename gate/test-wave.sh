@@ -156,6 +156,16 @@ fi
 ok "a refused spawn creates no lane worktree" "$([ ! -d "$WTROOT/f/R1" ] && echo 1)"
 ok "the refusal names the confirmation rule" "$(grep -q 'confirmed by the human' "$REPO/out-f.txt" && echo 1)"
 
+# --- a deleted wave root can be reused -----------------------------------------
+# A wave root is a temp directory: deleting it leaves the worktrees registered but
+# missing, and `git worktree add` refuses that until the registration is pruned.
+rm -rf "$WTROOT/a"
+"$WAVE" sysdv --ledger "$LEDGER" --level L3 --base "$BASE" --confirm --width 2 \
+	--root "$WTROOT/a" --child "$STUB_DIR/good" --no-records >"$REPO/out-g.txt" 2>&1 || true
+ok "a deleted wave root is reusable" \
+	"$([ "$(grep -cE '[[:space:]]ok[[:space:]]' "$REPO/out-g.txt" || true)" -eq 2 ] && echo 1)" \
+	"$(cat "$REPO/out-g.txt")"
+
 # --- argument guards ----------------------------------------------------------
 if "$WAVE" sysdv --ledger "$LEDGER" --level L9 --base "$BASE" >/dev/null 2>&1; then
 	ok "an empty level is a usage error" 0
