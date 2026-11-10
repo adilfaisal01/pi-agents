@@ -1,0 +1,20 @@
+{
+  "name": "pi-v-model-agents",
+  "version": "0.1.0",
+  "description": "Capability modes for pi (oracle / plan / build / yolo) plus a test-author subagent, as used by the V-model discipline.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "agent-modes",
+    "v-model"
+  ],
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./pi/extensions/agent-modes/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}

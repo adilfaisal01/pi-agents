@@ -23,6 +23,18 @@ the documents yet — read it as a known gap, not as a plan.
    absence-of-failure rows stay `structural` or `declared`. (`docs/06`)
 9. **Lane width is 3–4**, below the runner's maximum, because each lane is a full agent
    process and a full context. (`docs/02`)
+10. **The apparatus is vendored here, not kept in a personal install.** `pi/` is the
+    profile: the mode guard with `writeScope`/`writeDeny`, the shell policy, per-mode
+    models, the tracked-tree audit, and the `sysdv` subagent definition.
+11. **The apparatus is distributed as a pi package.** `package.json` carries the
+    `pi-package` keyword and a `pi.extensions` manifest pointing at
+    `pi/extensions/agent-modes/index.ts`, so `pi install git:github.com/<owner>/v-model-agents`
+    works for anyone with pi, with no clone and no symlink. `install.sh` is demoted to a
+    development convenience against this checkout. Consequences: the shipped
+    `config.json` carries **no** provider and **no** model ids (a package cannot know
+    what a stranger has), and the user configures via layered override files
+    (`~/.pi/agent/agent-modes.json`, `<repo>/.pi/agent-modes.json`) rather than editing a
+    file inside the package, which `pi update` would overwrite.
 
 ## Open
 
@@ -44,8 +56,18 @@ the documents yet — read it as a known gap, not as a plan.
 5. **Hardware queue.** One board/robot means lanes queue, but there is no queue artifact
    yet — only a rule. *Open: a lock file with a holder and an expiry is probably enough;
    nothing specified.*
-6. **Licence.** None chosen. A practices repo with copy-pastable gate scripts needs a
-   decision before it is public.
-7. **Does this repo carry the mode/guard implementation?** The path-scope refusal and the
-   drift audit currently live in a local agent extension, not here. *Open: vendor the
-   guard here as a small reference implementation, or keep it where it runs.*
+6. **Licence.** None chosen, but the package manifest claims MIT — decide before publish.
+   A practices repo with copy-pastable gate scripts needs the decision before it is
+   public.
+7. **Does this repo carry the mode/guard implementation?** *Answered: yes.* `pi/` holds
+   the guard and `package.json` makes it installable.
+8. **How does `sysdv` reach a stranger's pi?** pi's built-in extensions are only
+   `mcp`, `llama.cpp`, `codemode`, `tool-search` — subagent is an *example*, not built in,
+   and a pi package can install extensions/skills/prompts/themes but **not** agent
+   definitions. So `pi/agents/sysdv.md` alone installs nothing. *Open, two options:*
+   (a) the package ships its own minimal runner that spawns `pi --print --mode json
+   --no-session --tools … --append-system-prompt agents/sysdv.md` and then verifies the
+   child's `git diff --name-only` ⊆ `tests/**` — self-contained, and it closes the hole
+   where `keepExtensions` lets a read-only mode delegate a write; (b) vendor pi's MIT
+   subagent example (two files, ~48 KB, upstream-coupled) and document the
+   `~/.pi/agent/agents/` copy step.

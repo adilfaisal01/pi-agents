@@ -40,6 +40,10 @@ lane R3 ─ sysDV ─┘                │
 
 ## Repo map
 
+`pi/` is the apparatus that runs (a pi mode guard, packaged as a [pi
+package](https://pi.dev/docs/packages)); `docs/` is why it is shaped that way;
+`gate/` is the lock.
+
 | path | contents |
 | --- | --- |
 | `docs/01-modes-and-capabilities.md` | permission profiles per role: writes, path scope, shell |
@@ -52,14 +56,35 @@ lane R3 ─ sysDV ─┘                │
 | `gate/run-tests.sh` | canonical test command for a frozen suite (locked) |
 | `gate/lock-check.sh` | refuses a tree whose frozen test surface moved since the pin |
 | `gate/test-lock-check.sh` | self-test for `lock-check.sh` |
-| `agents/sysdv.md` | drop-in subagent definition (`~/.pi/agent/agents/`) |
+| `pi/` | the apparatus that runs: `extensions/agent-modes/` (modes, write scopes, shell policy, drift audit) and `agents/sysdv.md` |
+| `install.sh` | symlink the apparatus into `~/.pi/agent` (local development only) |
+| `package.json` | the pi manifest that makes `pi install` work |
+| `check.sh` | gate self-test + extension typecheck + extension selftest |
 | `examples/ledger-example.md` | a filled ledger for a control/compiler change |
 | `DECISIONS.md` | what is decided, and the questions still open |
 
 ## Quick start
 
+Anyone with pi installed can load the apparatus directly — no clone, no symlink:
+
 ```bash
-# verify the gate script itself
+pi install git:github.com/<owner>/v-model-agents   # or npm:pi-v-model-agents once published
+pi -e .                                            # try it for one session only
+
+# configure your own models and write scopes without editing the package
+$EDITOR ~/.pi/agent/agent-modes.json               # or <repo>/.pi/agent-modes.json
+```
+
+The package ships no model ids on purpose — a package cannot know which providers you
+have. `pi/README.md` documents the override layers and every config key.
+
+Working on this repository itself:
+
+```bash
+./install.sh --dry-run      # what install.sh would link into ~/.pi/agent (dev path)
+./check.sh                  # gate self-test + tsc + extension selftest (all verifiable)
+
+# verify the gate script itself, standalone
 ./gate/test-lock-check.sh
 
 # after freezing a suite at commit <sha>
@@ -68,6 +93,9 @@ lane R3 ─ sysDV ─┘                │
 
 ## Status
 
-Design plus the one mechanical piece that can be tested today (`gate/`). The mode
-permissions described in `docs/01` are the contract to implement; nothing here patches
-an agent runtime.
+Docs plus the apparatus: the mode guard (`pi/extensions/agent-modes/`) enforces write
+scopes, shell policy, per-mode models and the tracked-tree audit, and is covered by
+`selftest.mjs`. The gate (`gate/`) is tested by its own self-test. Still open: the lane
+orchestration itself (a prompt contract for `plan`, not code), delivery of the `sysdv`
+subagent (pi ships no built-in subagent tool, and a pi package cannot install agent
+definitions — see `DECISIONS.md`), and the hardware queue (`DECISIONS.md`#5).
