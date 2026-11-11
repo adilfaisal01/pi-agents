@@ -1,0 +1,335 @@
+#!/usr/bin/env bash
+# review-lanes — a runnable, sha-addressable checkout for one lane, and the assertion
+# that the code it ran actually came from there.
+#
+#   review-lanes provision <repo> [--base <ref>] [--name <label>] [--install] [--dry-run]
+#   review-lanes verify <worktree> [--pythonpath <dir>] [--python <exe>]
+#   review-lanes remove <worktree> [--force]
+#
+# THE FAILURE THIS EXISTS FOR. Two agents are looking at the same code, one is told to
+# reproduce a bug in a tree, and the tree it actually ran was not the tree under review —
+# because a shared virtualenv, an editable install, or a console script still pointed at
+# the main checkout. The round comes back clean, the record says clean, and the finding
+# that should have been raised was never possible. Nothing else in a pipeline catches
+# this: every artifact is green, and the only wrong thing is a path.
+#
+# WHY A WORKTREE. Identity and isolation come from git: a round detaches at the sha it
+# reviews (`git checkout --detach`), and a lane's writes cannot reach the tree under
+# review or move a pin. The ENVIRONMENT does not come from git, and the two must not be
+# confused:
+#
+#   dependencies   path-independent  -> shareable (one venv, one uv cache, one target/)
+#   the project    path-keyed        -> NEVER shared (editable .pth, console scripts)
+#
+# So "did the environment carry over?" is the wrong question. The answerable one is
+# "does `import <pkg>` resolve INSIDE this worktree?" — `verify` asserts exactly that and
+# refuses otherwise.
+#
+# DEPTH. The worktree is a SIBLING AT THE SAME DEPTH (`<parent>/<repo>.<name>.wt`), never
+# under a subdirectory, so a relative path dep (`path = "../deps/x"`, or
+# `path = "../../../sibling/crates/..."`) resolves exactly as it does in the repo. A
+# `.wt/` subdirectory would add a level and break every such dep — at build time, in the
+# lane, far from the cause.
+#
+# Provision ONCE, detach MANY times: an editable install is keyed by directory, not by
+# commit, so `checkout --detach <sha>` does not invalidate it.
+#
+# stdout is machine-readable (WORKTREE=, PYTHONPATH=, SHA=, VENV=); stderr is prose.
+# Exit 0 provisioned/verified · 1 refused · 2 usage.
+set -euo pipefail
+
+PY="${PYTHON:-python3}"
+
+usage() {
+	cat >&2 <<'EOF'
+usage: review-lanes <command> [options]
+
+  provision <repo> [--base <ref>] [--name <label>] [--install] [--dry-run]
+         Create or re-detach a lane worktree at the same depth as <repo>, then assert
+         that every package in it resolves INSIDE it. --install provisions a venv beside
+         the worktree with an editable install (needs uv); the default is PYTHONPATH.
+
+  verify <worktree> [--pythonpath <dir>] [--python <exe>]
+         Run only the resolution assertion. Exit 1 if any package resolves outside
+         <worktree> — the wrong-tree refusal.
+
+  remove <worktree> [--force]
+         Drop the worktree (refuses a dirty one without --force).
+
+Machine-readable lines on stdout: WORKTREE=, PYTHONPATH=, SHA=, VENV=
+(provision only: SHA is the commit the worktree is detached at).
+exit 0 ok, 1 refused, 2 usage.
+EOF
+}
+
+die() { printf 'review-lanes: %s\n' "$*" >&2; exit 2; }
+refuse() { printf 'review-lanes: REFUSED — %s\n' "$*" >&2; exit 1; }
+note() { printf '  note  %s\n' "$*" >&2; }
+ok() { printf '  ok    %s\n' "$*" >&2; }
+bad() { printf '  FAIL  %s\n' "$*" >&2; }
+
+# --- the assertion ---------------------------------------------------------
+# find_spec, not import: resolving a package must not execute it. A project usually pulls
+# numpy/mujoco/zig at import time, and an assertion that only holds when the whole
+# dependency tree is installed cannot guard the case that matters.
+ASSERT_PY="$(cat <<'PY'
+import importlib.util, sys
+pkg, want = sys.argv[1], sys.argv[2]
+try:
+    spec = importlib.util.find_spec(pkg)
+except Exception as exc:
+    print(f"cannot resolve {pkg}: {type(exc).__name__}: {exc}")
+    sys.exit(1)
+origin = getattr(spec, "origin", None) or ""
+if not origin or origin in ("built-in", "frozen", "namespace"):
+    print(f"{pkg}: no single origin ({origin or 'namespace package'})")
+    sys.exit(3)
+print(origin)
+sys.exit(0 if origin.startswith(want) else 1)
+PY
+)"
+
+default_pythonpath() { # <worktree>
+	if [ -d "$1/src" ]; then printf '%s\n' "$1/src"; else printf '%s\n' "$1"; fi
+}
+
+discover_pkgs() { # <worktree> -> one package name per line
+	local wt="$1" base d n found=0
+	for base in "$wt/src" "$wt"; do
+		[ -d "$base" ] || continue
+		for d in "$base"/*/; do
+			[ -f "${d}__init__.py" ] || continue
+			n="$(basename "$d")"
+			case "$n" in tests | test | .*) continue ;; esac
+			printf '%s\n' "$n"
+			found=1
+		done
+		[ "$found" = 1 ] && return 0
+	done
+	return 0
+}
+
+assert_resolution() { # <worktree> <pythonpath> <python>
+	local wt="$1" pp="$2" pybin="$3" pkg out rc seen=0 failed=0
+	while IFS= read -r pkg; do
+		[ -n "$pkg" ] || continue
+		seen=$((seen + 1))
+		set +e
+		# cd / so sys.path[0] ('' = cwd) cannot shadow the worktree being verified.
+		out="$(cd / && PYTHONPATH="$pp" "$pybin" -c "$ASSERT_PY" "$pkg" "$wt" 2>&1)"
+		rc=$?
+		set -e
+		case "$rc" in
+		0) ok "$(printf '%-16s %s' "$pkg" "$out")" ;;
+		3) note "$(printf '%-16s %s' "$pkg" "$out") — skipped" ;;
+		*)
+			bad "$(printf '%-16s %s' "$pkg" "$out")"
+			failed=$((failed + 1))
+			;;
+		esac
+	done < <(discover_pkgs "$wt")
+	if [ "$seen" -eq 0 ]; then
+		note "no python package under $wt — nothing to resolve"
+		return 0
+	fi
+	[ "$failed" -eq 0 ] && return 0
+	refuse "$failed package(s) resolve OUTSIDE $wt — the lane would run another tree"
+}
+
+# --- relative path deps ----------------------------------------------------
+# A worktree at the same depth resolves these identically to the repo, so a failure here
+# means the layout is wrong (or the dep is missing), not that git did something. Cheap,
+# because the alternative is a build failure forty seconds into a lane.
+scan_path_deps() { # <worktree>
+	"$PY" - "$1" <<'PY'
+import os, re, sys
+
+root = os.path.abspath(sys.argv[1])
+missing = []
+
+def check(spec, origin, where):
+    if os.path.isabs(spec):
+        return
+    if not os.path.isdir(os.path.join(origin, spec)):
+        missing.append((spec, where))
+
+pyproject = os.path.join(root, "pyproject.toml")
+if os.path.isfile(pyproject):
+    try:
+        import tomllib
+        with open(pyproject, "rb") as handle:
+            doc = tomllib.load(handle)
+        sources = ((doc.get("tool") or {}).get("uv") or {}).get("sources") or {}
+        for name, spec in sources.items():
+            if isinstance(spec, dict) and isinstance(spec.get("path"), str):
+                check(spec["path"], root, f"[tool.uv.sources] {name}")
+    except ImportError:
+        print("  note  tomllib missing — [tool.uv.sources] not checked", file=sys.stderr)
+    except Exception as exc:
+        print(f"  note  pyproject.toml not parsed: {exc}", file=sys.stderr)
+
+section = re.compile(r"^\s*\[([^\]]+)\]")
+pathdep = re.compile(r'^\s*path\s*=\s*"([^"]+)"')
+skip = {".git", ".venv", "target", "node_modules", "__pycache__"}
+
+for dirpath, dirnames, filenames in os.walk(root):
+    dirnames[:] = [d for d in dirnames if d not in skip]
+    if "Cargo.toml" not in filenames:
+        continue
+    current = ""
+    with open(os.path.join(dirpath, "Cargo.toml"), encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            match = section.match(line)
+            if match:
+                current = match.group(1)
+                continue
+            if "dependenc" not in current:
+                continue
+            match = pathdep.match(line)
+            if match:
+                check(match.group(1), dirpath, f"[{current}] in {os.path.relpath(dirpath, root)}")
+
+for spec, where in missing:
+    print(f"  missing path dep: {spec}  ({where})", file=sys.stderr)
+sys.exit(1 if missing else 0)
+PY
+}
+
+# --- verbs -----------------------------------------------------------------
+verify_cmd() {
+	[ "$#" -gt 0 ] || { usage; exit 2; }
+	local wt="$1"
+	shift
+	local pp="" pybin="$PY"
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+		--pythonpath) pp="${2:?--pythonpath needs a value}"; shift 2 ;;
+		--python) pybin="${2:?--python needs a value}"; shift 2 ;;
+		*) die "verify: unknown option '$1'" ;;
+		esac
+	done
+	[ -d "$wt" ] || die "verify: no such directory: $wt"
+	wt="$(cd "$wt" && pwd)"
+	[ -n "$pp" ] || pp="$(default_pythonpath "$wt")"
+	assert_resolution "$wt" "$pp" "$pybin"
+	printf 'VERIFIED=%s\n' "$wt"
+}
+
+provision_cmd() {
+	[ "$#" -gt 0 ] || { usage; exit 2; }
+	local repo="$1"
+	shift
+	local base="HEAD" name="" install=0 dry=0
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+		--base) base="${2:?--base needs a value}"; shift 2 ;;
+		--name) name="${2:?--name needs a value}"; shift 2 ;;
+		--install) install=1; shift ;;
+		--dry-run) dry=1; shift ;;
+		*) die "provision: unknown option '$1'" ;;
+		esac
+	done
+
+	# Bad arguments are usage errors (2); policy walls are refusals (1).
+	local root parent repo_name wt_home sha
+	root="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null)" ||
+		die "not inside a git work tree: $repo"
+	case "$(basename "$root")" in
+	*.wt) die "refusing to provision FROM a lane worktree ($root) — provision from the repo" ;;
+	esac
+	sha="$(git -C "$root" rev-parse --verify --quiet "${base}^{commit}")" ||
+		die "'$base' is not a commit in $root"
+
+	parent="$(dirname "$root")"
+	repo_name="$(basename "$root")"
+	[ -n "$name" ] || name="review"
+	# Same depth as the repo, not inside it: `../deps/x` and `../../../sibling/crates`
+	# must resolve to exactly what they resolve to from the repo itself.
+	wt_home="$parent/$repo_name.$name.wt"
+	local venv_home="$parent/$repo_name.$name.venv"
+
+	local reused=0
+	if [ -e "$wt_home" ]; then
+		if git -C "$root" worktree list --porcelain | grep -qx "worktree $wt_home"; then
+			[ -z "$(git -C "$wt_home" status --porcelain)" ] ||
+				refuse "worktree is dirty — a lane wrote into it: $wt_home"
+			reused=1
+		else
+			refuse "path exists but is not a worktree of $root: $wt_home"
+		fi
+	fi
+
+	if [ "$dry" = 1 ]; then
+		printf '  would %s %s at %s\n' \
+			"$([ "$reused" = 1 ] && echo detach || echo create)" "$wt_home" "${sha:0:10}" >&2
+	else
+		if [ "$reused" = 1 ]; then
+			git -C "$wt_home" checkout -q --detach "$sha"
+		else
+			git -C "$root" worktree add -q --detach "$wt_home" "$sha"
+		fi
+		# A worktree shares HISTORY, not the environment. Deps are path-independent and
+		# may be shared; the project is path-keyed and must be installed here.
+		if [ "$install" = 1 ]; then
+			command -v uv >/dev/null || refuse "--install needs uv on PATH"
+			uv venv --quiet --allow-existing "$venv_home" >&2
+			(cd "$wt_home" && uv pip install --quiet --python "$venv_home/bin/python" -e "$wt_home") >&2
+		fi
+		scan_path_deps "$wt_home" || refuse "a relative path dep does not resolve from the worktree"
+	fi
+
+	local pybin="$PY"
+	[ "$install" = 1 ] && pybin="$venv_home/bin/python"
+	local pp
+	if [ ! -d "$wt_home" ]; then
+		# --dry-run before the worktree exists: it mirrors the repo, so derive the layout
+		# from the repo and re-prefix it.
+		pp="$(default_pythonpath "$root")"
+		pp="$wt_home${pp#"$root"}"
+	else
+		pp="$(default_pythonpath "$wt_home")"
+	fi
+
+	if [ "$dry" = 1 ]; then
+		printf '  would resolve packages against PYTHONPATH=%s\n' "$pp" >&2
+	else
+		assert_resolution "$wt_home" "$pp" "$pybin"
+	fi
+
+	printf 'WORKTREE=%s\n' "$wt_home"
+	printf 'PYTHONPATH=%s\n' "$pp"
+	printf 'SHA=%s\n' "$sha"
+	[ "$install" = 1 ] && printf 'VENV=%s\n' "$venv_home"
+	return 0
+}
+
+remove_cmd() {
+	[ "$#" -gt 0 ] || { usage; exit 2; }
+	local wt="$1"
+	shift
+	local force=0
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+		--force) force=1; shift ;;
+		*) die "remove: unknown option '$1'" ;;
+		esac
+	done
+	[ -e "$wt" ] || die "remove: no such path: $wt"
+	local main
+	main="$(git -C "$wt" worktree list --porcelain | sed -n 's/^worktree //p' | head -1)"
+	[ -n "$main" ] || die "remove: not a worktree: $wt"
+	if [ "$force" != 1 ] && [ -n "$(git -C "$wt" status --porcelain)" ]; then
+		refuse "worktree is dirty: $wt — commit, discard, or pass --force"
+	fi
+	git -C "$main" worktree remove --force "$wt"
+	printf 'REMOVED=%s\n' "$wt"
+}
+
+cmd="${1:-}"
+[ "$#" -gt 0 ] && shift
+case "$cmd" in
+provision) provision_cmd "$@" ;;
+verify) verify_cmd "$@" ;;
+remove) remove_cmd "$@" ;;
+*) usage; exit 2 ;;
+esac
