@@ -1,0 +1,19 @@
+{
+  "name": "pi-code-review-swarm",
+  "version": "0.1.0",
+  "description": "Two-model parallel code review for pi: a correctness lane and a quality lane, dispatched as real subagent processes, merged into one numbered SEV1-SEV4 table.",
+  "keywords": [
+    "pi-package",
+    "code-review",
+    "subagent",
+    "swarm"
+  ],
+  "type": "module",
+  "license": "MIT",
+  "pi": {
+    "skills": ["./skills"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
