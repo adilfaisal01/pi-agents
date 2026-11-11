@@ -65,18 +65,33 @@ scripts/selftest.sh         # static checks: frontmatter, model ids, read-only t
 scripts/selftest.sh --live  # + a real two-lane dispatch at tests/fixture/
 ```
 
-The **skill** loads from this package's `skills/` directory if you install the repo as a pi
-package (it is one: `keywords: ["pi-package"]`, `pi.skills`). The **agents** cannot: pi has no
+The **skill** and the **`/review` prompt template** load from this package's `skills/` and
+`prompts/` directories once the repo is installed as a pi package (it is one:
+`keywords: ["pi-package"]`, `pi.skills`, `pi.prompts`). The **agents** cannot: pi has no
 package resource for agent definitions, which are only read from `~/.pi/agent/agents` and the
 nearest `.pi/agents`. Hence `install.sh` — a symlink, so the checkout stays authoritative and
 editing a lane here takes effect immediately.
 
-If you also keep a copy at `~/.pi/agent/skills/code-review-swarm/`, remove it once the
-package is installed; `install.sh` warns rather than deleting your file.
+Installing the package makes the checkout the single source of truth for the skill, so remove
+any copy at `~/.pi/agent/skills/code-review-swarm/`; `install.sh` warns rather than deleting
+it for you.
+
+## Invoke it
+
+Three ways in, in increasing explicitness:
+
+| Entry | How |
+|---|---|
+| Skill, model-driven | just ask — *"review the staged diff"*, *"review src/ctl with two models"*. Pi lists the skill in the system prompt and loads it when the request matches. |
+| `/review [scope]` | prompt template shipped in this package. Expands to the skill's procedure with the scope filled in; no arguments means the staged diff. |
+| `/skill:code-review-swarm [scope]` | forces the skill body into context even if the model would not have picked it. Works even with `enableSkillCommands` off. |
+
+`/reload` picks up a changed template or skill in an active session; a new session picks
+them up on start. Run `/review` with no argument to review whatever is staged.
 
 ## Use
 
-Ask for a review; the skill drives the rest.
+Ask for a review, or type `/review`; the skill drives the rest.
 
 ```
 review the staged diff
@@ -108,6 +123,7 @@ runs both lenses sequentially in one session under the same contracts and labels
 agents/review-correctness.md   correctness lane: lens, rules, output contract, model
 agents/review-quality.md       quality lane: same, different lens and model
 skills/code-review-swarm/      the skill: scope, dispatch, merge, severity, report
+prompts/review.md              `/review [scope]` prompt template
 scripts/install.sh             symlink lanes into ~/.pi/agent/agents
 scripts/selftest.sh            static + --live checks
 tests/fixture/buggy.py         8 documented defects, ground truth in fixture/README.md

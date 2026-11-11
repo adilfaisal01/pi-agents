@@ -116,11 +116,42 @@ check_static() {
 		fail "skill: skills/code-review-swarm/SKILL.md missing or unfrontmattered"
 	fi
 
+	tpl="$ROOT/prompts/review.md"
+	if [ -f "$tpl" ] && [ -n "$(frontmatter_field "$tpl" description)" ]; then
+		pass "template: /review frontmatter"
+	else
+		fail "template: prompts/review.md missing or has no description"
+	fi
+	if grep -qF '${@:-' "$tpl" 2>/dev/null; then
+		pass "template: no-argument default (staged diff)"
+	else
+		fail "template: /review has no \${@:-…} default scope"
+	fi
+	if grep -qF 'code-review-swarm' "$tpl" 2>/dev/null; then
+		pass "template: names the skill it drives"
+	else
+		fail "template: /review does not name the code-review-swarm skill"
+	fi
+
 	if command -v node >/dev/null 2>&1; then
-		if node -e 'JSON.parse(require("fs").readFileSync(process.argv[1]));' "$ROOT/package.json" 2>/dev/null; then
-			pass "package.json: parses"
+		if node -e '
+			const fs = require("fs"), path = require("path");
+			const root = process.argv[1];
+			const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+			const pi = pkg.pi || {};
+			const need = ["skills", "prompts"];
+			for (const k of need) {
+				if (!Array.isArray(pi[k]) || pi[k].length === 0) throw new Error(`pi.${k} not declared`);
+				for (const rel of pi[k]) {
+					const p = path.join(root, rel);
+					if (!fs.existsSync(p)) throw new Error(`pi.${k} -> ${rel} does not exist`);
+				}
+			}
+			if (!(pkg.keywords || []).includes("pi-package")) throw new Error("missing pi-package keyword");
+		' "$ROOT" 2>/dev/null; then
+			pass "package.json: manifest paths and pi-package keyword"
 		else
-			fail "package.json: does not parse"
+			fail "package.json: manifest paths, pi-package keyword, or JSON invalid"
 		fi
 	else
 		printf 'skip  package.json: node not on PATH\n'

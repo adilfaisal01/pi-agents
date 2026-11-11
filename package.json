@@ -11,7 +11,8 @@
   "type": "module",
   "license": "MIT",
   "pi": {
-    "skills": ["./skills"]
+    "skills": ["./skills"],
+    "prompts": ["./prompts"]
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
