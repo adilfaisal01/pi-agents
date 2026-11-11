@@ -28,6 +28,12 @@
 #
 # stdout is KEY=value; stderr is prose. MODE=worktree|shared says which dispatch to run, and
 # a shared tree is a weaker review — say so rather than presenting it as equal.
+#
+# NO DEPENDENCY ON A MODE GUARD. Isolation needs writes (`git worktree add`, and a dangling
+# `commit-tree` for a staged diff), so a session whose shell is read-only cannot have it.
+# That degrades the review (MODE=shared, DEGRADED=read-only) rather than failing it: the
+# swarm must be usable in any session, including one with no mode apparatus at all. Only a
+# dirty lane worktree is a refusal — that is evidence from a previous run, not a limitation.
 # Exit 0 ok · 1 refused · 2 usage.
 set -euo pipefail
 
@@ -46,7 +52,9 @@ usage: lane-prepare.sh <command> [options]
   prepare [--repo <path>] [--sha <ref>]
          Materialise the scope as a commit and provision one worktree per lane at it.
          Prints MODE=, SHA=, PARENT=, REPO=, CWD_CORRECTNESS=, CWD_QUALITY= on stdout.
-         MODE=shared means review-lanes was not found: the lanes then share the tree.
+         MODE=shared means the lanes share one tree; DEGRADED= names why. Isolated lanes
+         are an improvement, never a precondition: a read-only shell or a missing tool
+         degrades the review instead of aborting it.
 
   clean [--repo <path>]
          Remove both lane worktrees. Refuses nothing — a leftover dirty worktree is
@@ -88,11 +96,17 @@ materialise() {
 			die "'$ref' is not a commit in $root"
 		parent="$(git -C "$root" rev-parse -q --verify "${sha}^" || true)"
 	elif ! git -C "$root" diff --cached --quiet; then
+		# Materialising the index writes (a dangling tree and commit). A read-only shell
+		# cannot, and that must not abort the review — fall back to HEAD and say so; the
+		# provisioning attempt below will then degrade in the same way.
 		parent="$(git -C "$root" rev-parse HEAD)"
-		tree="$(git -C "$root" write-tree)" || refuse "git write-tree failed — is the index readable?"
-		sha="$(git -C "$root" commit-tree "$tree" -p "$parent" -m 'review: staged index')" ||
-			refuse "git commit-tree failed — set user.name/user.email, or pass --sha"
-		note "staged index materialised as ${sha:0:10} (dangling; HEAD and the index are untouched)"
+		if tree="$(git -C "$root" write-tree)" &&
+			sha="$(git -C "$root" commit-tree "$tree" -p "$parent" -m 'review: staged index')"; then
+			note "staged index materialised as ${sha:0:10} (dangling; HEAD and the index are untouched)"
+		else
+			sha="$parent"
+			note "could not materialise the staged index — reviewing HEAD instead"
+		fi
 	else
 		sha="$(git -C "$root" rev-parse HEAD)"
 		parent="$(git -C "$root" rev-parse -q --verify "${sha}^" || true)"
@@ -114,6 +128,16 @@ prepare() {
 	root="$(repo_root "$repo")"
 	read -r sha parent <<<"$(materialise "$root" "$ref")"
 
+	# A dirty lane worktree is evidence a previous run left behind. Refuse before touching
+	# anything, so the message is ours rather than a tool's.
+	local lane wt
+	for lane in "${LANE_NAMES[@]}"; do
+		wt="$(dirname "$root")/$(basename "$root").$lane.wt"
+		if [ -d "$wt" ] && [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then
+			refuse "worktree is dirty — a lane wrote into it: $wt (run: $(basename "$0") clean)"
+		fi
+	done
+
 	local lanes
 	if ! lanes="$(find_lanes)"; then
 		note "review-lanes not found."
@@ -121,17 +145,23 @@ prepare() {
 		note "       put it on PATH, or check out review-lanes beside this repo."
 		note "falling back to a SHARED tree: lanes run in $root, repros go to /tmp,"
 		note "and the two tables are no longer guaranteed to describe the same code."
-		printf 'MODE=shared\nSHA=%s\nPARENT=%s\nREPO=%s\n' "$sha" "$parent" "$root"
+		printf 'MODE=shared\nDEGRADED=no-review-lanes\n'
+		printf 'SHA=%s\nPARENT=%s\nREPO=%s\n' "$sha" "$parent" "$root"
 		return 0
 	fi
 
-	local lane out wt
+	local out
 	local -A cwd=()
 	for lane in "${LANE_NAMES[@]}"; do
 		# stdout is the KEY=value block; stderr passes through (that is where the
 		# resolution assertion reports ok/FAIL per package).
 		if ! out="$("$lanes" provision "$root" --name "$lane" --base "$sha")"; then
-			refuse "could not provision the $lane worktree at ${sha:0:10} (see above)"
+			# Provisioning writes; a read-only shell cannot. Degrade, do not abort.
+			note "could not provision the $lane worktree at ${sha:0:10} (see above)"
+			note "the lanes will share $root and use /tmp for repros — a weaker review"
+			printf 'MODE=shared\nDEGRADED=read-only-or-provision-failed\n'
+			printf 'SHA=%s\nPARENT=%s\nREPO=%s\n' "$sha" "$parent" "$root"
+			return 0
 		fi
 		wt="$(printf '%s\n' "$out" | sed -n 's/^WORKTREE=//p')"
 		[ -n "$wt" ] || refuse "review-lanes printed no WORKTREE for $lane"
@@ -144,6 +174,7 @@ prepare() {
 		refuse "the quality worktree is not at ${sha:0:10}"
 	ok "two worktrees at ${sha:0:10} — the lanes cannot race each other"
 
+	[ -n "$parent" ] || note "no parent commit — the review is the whole tree at ${sha:0:10}"
 	printf 'MODE=worktree\n'
 	printf 'SHA=%s\n' "$sha"
 	printf 'PARENT=%s\n' "$parent"

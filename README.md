@@ -26,17 +26,17 @@ table from double-counting one defect as two findings.
 
 ## How the orchestration actually happens
 
-The `subagent` tool (pi's example extension, vendored into
-[`v-model-agents`](https://github.com/adilfaisal01/v-model-agents)) spawns children:
+The `subagent` tool ([`pi-subagent`](https://github.com/adilfaisal01/pi-subagent), a
+standalone package forked from pi's example extension) spawns children:
 
 ```
 pi --mode json -p --no-session -ne --model <provider>/<id> --tools read,grep,find,ls,bash
 ```
 
-`-ne` matters: it stops the child from inheriting the parent session's extensions, so a mode
-guard loaded in the parent (oracle blocks `write`) cannot silently strip a lane's tools, and
-a child cannot re-enter `subagent`. The child's tool list comes from the agent frontmatter,
-not from the caller.
+`-ne` matters: it stops the child from inheriting the parent session's extensions, so
+whatever the parent has loaded cannot silently strip a lane's tools, and a child cannot
+re-enter `subagent`. The child's tool list comes from the agent frontmatter, not from the
+caller. Nothing here reads a mode, a role, or any config beyond the two agent files.
 
 Parallel mode is one tool call with a `tasks` array; pi runs the children concurrently and
 returns both transcripts.

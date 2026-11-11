@@ -70,10 +70,18 @@ as a dangling commit that touches nothing; `HEAD` otherwise — and each lane ge
 worktree at it. Same sha, two trees, and the lanes cannot race each other.
 
 - **`MODE=worktree`** — dispatch with `cwd`, and state the change as `git diff PARENT..SHA`
-in that checkout. Identical for both lanes, and no diff text to paste or truncate.
-- **`MODE=shared`** — `review-lanes` was not found. Say so in one line, dispatch without
-`cwd`, and the ask sends repros to `/tmp` and forbids writes into the working directory. A
-shared-tree run is a weaker review; present it as one rather than as equal.
+in that checkout. Identical for both lanes, and no diff text to paste or truncate. If
+`PARENT` is empty (a first commit) the review is the whole tree at `SHA`.
+- **`MODE=shared`** — isolated lanes were not possible; `DEGRADED=` says why (no
+`review-lanes`, or a shell that cannot write). Dispatch without `cwd`, and the ask sends
+repros to `/tmp` and forbids writes into the working directory. A shared-tree run is a
+weaker review; present it as one rather than as equal.
+
+**Never let this step stop the review.** Isolation needs writes, so a session with a
+read-only shell cannot have it — and that is a lesser problem than no review. If `prepare`
+fails, is blocked by the session, or prints no `MODE=`, run the shared-tree path, name the
+reason in the header, and continue. Nothing here may depend on a mode guard, a role
+apparatus, or any extension beyond the `subagent` tool itself.
 
 ### 3b. One call, parallel mode, `agentScope: "user"`
 
