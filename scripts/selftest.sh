@@ -59,7 +59,7 @@ agent_body() {
 ## Static checks ---------------------------------------------------------------
 
 check_static() {
-	local file name desc model tools body prov want_id
+	local file name desc model tools body prov want_id wscope
 	for lane in "${LANES[@]}"; do
 		file="$ROOT/agents/$lane.md"
 		if [ ! -f "$file" ]; then
@@ -107,6 +107,23 @@ check_static() {
 			*"| ID | SEV |"* | *"|ID|SEV|"*) pass "$lane: output contract present" ;;
 			*) fail "$lane: output contract (| ID | SEV | table) not stated" ;;
 		esac
+
+		# The dispatcher's write-scope post-check returns early when this field is absent
+		# (`if (!agent.writeScope?.length) return undefined`), so a lane without it is
+		# caught by nothing at all when its shell writes into the tree.
+		wscope=$(frontmatter_field "$file" write_scope)
+		if [ -n "$wscope" ]; then
+			pass "$lane: write_scope ($wscope)"
+		else
+			fail "$lane: no write_scope — the write-scope post-check is inert"
+		fi
+
+		# Both lanes carry a trigger: it is the only part of a finding that can be executed,
+		# and the merge keeps it. A lane without the column produces rows the table drops.
+		case $body in
+			*TRIGGER*) pass "$lane: TRIGGER column" ;;
+			*) fail "$lane: output contract has no TRIGGER column" ;;
+		esac
 	done
 
 	skill="$ROOT/skills/code-review-swarm/SKILL.md"
@@ -131,6 +148,33 @@ check_static() {
 		pass "template: names the skill it drives"
 	else
 		fail "template: /review does not name the code-review-swarm skill"
+	fi
+
+	# The merged column set is stated in three files. A column added in one and not the
+	# others is a contract the lanes never see, and nothing in a run reports it.
+	local cols='# | SEV | LOCATION | FINDING | TRIGGER | LENS | CONF' stated
+	for stated in "$skill" "$ROOT/README.md" "$tpl"; do
+		if grep -qF "$cols" "$stated" 2>/dev/null; then
+			pass "column set: ${stated#"$ROOT"/}"
+		else
+			fail "column set: ${stated#"$ROOT"/} does not state '$cols'"
+		fi
+	done
+
+	# The model is the agents' frontmatter and nowhere else. A copy in the skill drifts
+	# silently — and the only artifact that reports the wrong model is the review itself.
+	if grep -qF 'Default model' "$skill" 2>/dev/null; then
+		fail "skill: states a default model — read model: from the agent file"
+	else
+		pass "skill: no duplicated default model"
+	fi
+
+	# lane-prepare.sh is the piece that gives each lane its own checkout; it must at least
+	# parse, since a broken one silently downgrades every review to a shared tree.
+	if [ -f "$ROOT/scripts/lane-prepare.sh" ] && bash -n "$ROOT/scripts/lane-prepare.sh" 2>/dev/null; then
+		pass "scripts/lane-prepare.sh parses"
+	else
+		fail "scripts/lane-prepare.sh missing or does not parse"
 	fi
 
 	if command -v node >/dev/null 2>&1; then
@@ -177,7 +221,7 @@ PROMPT
 	printf '%s\n' "$prompt" >"$out.prompt"
 
 	(
-		cd "$ROOT" || exit 1
+		cd "${LANE_CWD:-$ROOT}" || exit 1
 		pi -p --no-session -ne \
 			--model "$model" \
 			--tools read,grep,find,ls,bash \
@@ -207,6 +251,13 @@ assert_contract() {
 		pass "$lane: COVERAGE line"
 	else
 		fail "$lane: no COVERAGE line"
+	fi
+
+	# The static check proves the contract states TRIGGER; this proves the model emits it.
+	if grep -Eq '^\|.*TRIGGER' "$out"; then
+		pass "$lane: TRIGGER column emitted"
+	else
+		fail "$lane: table has no TRIGGER column (contract not honoured)"
 	fi
 
 	if grep -q 'buggy.py' "$out"; then
