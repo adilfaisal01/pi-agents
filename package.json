@@ -1,18 +1,18 @@
 {
-  "name": "pi-v-model-agents",
-  "version": "0.1.0",
-  "description": "Capability modes for pi (oracle / plan / build / yolo) plus a test-author subagent, as used by the V-model discipline.",
+  "name": "pi-agent-modes",
+  "version": "0.2.0",
+  "description": "Per-mode capability profiles for pi — oracle / plan / build / yolo. Each mode carries its own tool set, shell policy, write scope, system-prompt contract, and optionally its own model. Ships the V-model discipline as optional, downloadable material.",
   "keywords": [
     "pi-package",
     "pi-extension",
     "agent-modes",
-    "v-model"
+    "modes",
+    "permissions"
   ],
   "type": "module",
   "pi": {
     "extensions": [
-      "./pi/extensions/agent-modes/index.ts",
-      "./pi/extensions/subagent/index.ts"
+      "./modes/index.ts"
     ]
   },
   "peerDependencies": {

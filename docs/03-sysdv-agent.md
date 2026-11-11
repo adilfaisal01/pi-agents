@@ -1,7 +1,7 @@
-# 03 — The sysDV subagent
+# 03 — The sysDV lane
 
-`sysdv` writes the tests that the build must satisfy. It runs as a **subagent**: a
-separate agent process with its own context and its own model, so it cannot inherit the
+`sysdv` writes the tests that the build must satisfy. It runs as a **lane**: a separate
+agent process with its own context and its own model, so it cannot inherit the
 implementation intent from the conversation that will produce the build.
 
 ## Input contract
@@ -37,10 +37,21 @@ Suggested model roles (adjust to what the provider actually serves):
 | sysDV | a family **not** used by build | decorrelates failure modes |
 | build | builder-family | implementation throughput |
 
-The shipped `sysdv.md` deliberately carries **no** `model:` line. A package cannot know
-which providers you have, and a hardcoded default would silently break the rule above by
-inheriting the parent's model. Set it where the agent file lives, or in a copy under
-`~/.pi/agent/agents/sysdv.md` (which wins over the shipped one).
+The shipped `sysdv.md` deliberately carries **no** model. A package cannot know which
+providers you have, and a hardcoded default would silently break the rule above. The
+model is chosen when the lane is spawned and nowhere else:
+
+```bash
+./gate/wave.sh sysdv --ledger ledger.md --level L3 --base <sha> --confirm \
+    --model <test-author model>
+./gate/wave.sh build --ledger ledger.md --level L3 --pin <pin> --confirm \
+    --model <build model>
+```
+
+`--model` is handed to the `pi` child that runs the lane; `PI_SYSDV_MODEL` and
+`PI_BUILD_MODEL` supply the same two choices as environment defaults. Nothing records
+which model ran a lane: the pin is what the suite is, and the trail says what happened to
+the row.
 
 ## Output contract
 
@@ -69,14 +80,14 @@ git -C <worktree> status --porcelain      # untracked test files must be listed 
 
 Anything outside the scope: discard the whole lane run, do not cherry-pick around it.
 
-**The post-check is code, not discipline.** `pi/extensions/subagent/` reads that
-`git status` itself when the child exits, compares it against the `write_scope` in the
-agent's frontmatter, and fails the lane with the offending paths. A lane that wrote
-source cannot report success. Derived artifacts are filtered (a lane must run the suite,
-and running it writes caches) and the tree is snapshotted before the child starts, so a
-worktree that was already dirty is not blamed on it. What it still cannot see: a child
-handed the wrong `cwd`, or a write **outside** the worktree — `sysdv` has an unrestricted
-shell, so `pip install` into user site-packages is possible and is not caught here.
+**The post-check is code, not discipline.** `gate/wave.sh` reads that `git status`
+itself when the child exits, compares it against the lane's scope (`in_scope()`, which
+mirrors `tests/**` and test configuration), and fails the lane with the offending paths. A
+lane that wrote source cannot report success. Derived artifacts are filtered (a lane must
+run the suite, and running it writes caches), and the worktree is created fresh from the
+base commit, so a tree that was already dirty cannot be blamed on the lane. What it still
+cannot see: a write **outside** the worktree — `sysdv` has an unrestricted shell, so
+`pip install` into user site-packages is possible and is not caught here.
 
 ## Rejection rules (apply per lane, before the barrier)
 

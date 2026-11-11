@@ -38,8 +38,8 @@ one lane.
 - 3–4 lanes in flight, not the maximum.
 - Each lane is a full agent process with its own context; a 1T-parameter model at 1M
   context is latency, not free parallelism.
-- The cap is a property of the runner (`MAX_PARALLEL_TASKS = 8` in the shipped
-  `subagent` example), not a target.
+- The cap is a property of the runner (a wave spawns at most `--width` children at once),
+  not a target.
 
 ## Waves are levels, and they run bottom-up
 
@@ -84,9 +84,11 @@ together — that run, and only that run, supports the delivery claim.
 confirmed by the human (plan authors the ledger) before any lane runs.
 
 `wave.sh` is a script, not an agent call, on purpose: `DECISIONS.md` #2 — scripts
-certify, the human judges. The interactive equivalent is the `subagent` tool with a
-`cwd` per lane; the difference is that the script also creates the worktree and checks
-the three refusals, so a wrong wave fails instead of looking successful.
+certify, the human judges. It creates each worktree itself, spawns each lane as its own
+`pi` process, and checks the refusals after every lane, so a wrong wave fails instead of
+looking successful. There is no in-session equivalent to fall back to: a lane that runs
+inside your session shares your context and your tree, which is the thing the worktree
+exists to prevent.
 
 ## The one thing that cannot be parallelized away
 

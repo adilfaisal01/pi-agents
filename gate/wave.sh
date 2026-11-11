@@ -25,10 +25,18 @@
 set -euo pipefail
 
 PKG_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-# The agent file belongs to THE PACKAGE, not to the repo being worked on: gate/ is
-# meant to be dropped into a target repo, and that repo has no pi/agents/.
-AGENT_FILE="${PI_SYSDV_AGENT:-$PKG_ROOT/pi/agents/sysdv.md}"
-BUILD_AGENT_FILE="${PI_BUILD_AGENT:-$PKG_ROOT/pi/agents/build.md}"
+# The agent file belongs to THE DISCIPLINE, not to the repo being worked on: gate/ and
+# agents/ are meant to be dropped into a target repo together (docs/04), and the lane
+# prompt is a property of the role rather than of the code being changed.
+AGENT_FILE="${PI_SYSDV_AGENT:-$PKG_ROOT/agents/sysdv.md}"
+BUILD_AGENT_FILE="${PI_BUILD_AGENT:-$PKG_ROOT/agents/build.md}"
+
+# The model a lane runs on. docs/03 asks that the test author and the build not share a
+# model family; the choice belongs to the process that owns the work, so it is a flag
+# here rather than a preference stored somewhere in a session. Empty = the child's own
+# default, which is what a shared machine should get when nobody said otherwise.
+SYSDV_MODEL="${PI_SYSDV_MODEL:-}"
+BUILD_MODEL="${PI_BUILD_MODEL:-}"
 
 usage() {
 	cat >&2 <<'EOF'
@@ -39,7 +47,7 @@ usage: wave.sh <command> [options]
 
   sysdv  --ledger <f> --level L3 --base <sha> --confirm
          [--width 3] [--root <dir>] [--child <cmd>] [--dry-run]
-         [--records <f>|--no-records]
+         [--model <id>] [--records <f>|--no-records]
          Wave 1: one test-author lane per row, at the pre-implementation commit.
 
   freeze --ledger <f> --level L3 --base <sha> --root <dir>
@@ -50,7 +58,7 @@ usage: wave.sh <command> [options]
 
   build  --ledger <f> --level L3 --pin <sha> --confirm
          [--width 3] [--root <dir>] [--child <cmd>] [--dry-run]
-         [--records <f>|--no-records]
+         [--model <id>] [--records <f>|--no-records]
          Wave 2: one implementation lane per row, at the pin, then the composed
          gate — serially, once.
 
@@ -58,6 +66,11 @@ usage: wave.sh <command> [options]
 
 sysdv and build refuse to spawn lanes without --confirm: the human confirms the
 ledger (plan authors it), then the wave runs. Exit 0 ok · 1 refused · 2 usage.
+
+--model (or PI_SYSDV_MODEL / PI_BUILD_MODEL) is handed to the `pi` child that runs
+the lane, so the test author and the build can be different model families without
+any per-mode configuration. Nothing is recorded about which model ran: the pin is
+what the suite is, and the record says what happened to the row.
 EOF
 }
 die() { printf 'wave: %s\n' "$*" >&2; exit 2; }
@@ -172,7 +185,7 @@ in_scope() {
 	esac
 }
 
-# Caches a legitimate run produces (mirrors pi/extensions/subagent).
+# Caches a legitimate run produces, which are never the lane's product.
 is_derived() {
 	case "$1" in
 	__pycache__/* | */__pycache__/* | *.pyc | *.pyo) return 0 ;;
@@ -374,6 +387,7 @@ run_lane() {
 		}
 		(cd "$wt" && pi --mode json -p --no-session -ne \
 			--tools read,grep,find,ls,bash,write,edit \
+			${SYSDV_MODEL:+--model "$SYSDV_MODEL"} \
 			--append-system-prompt "$body" \
 			"$(cat "$root/$id.task")") >>"$log" 2>&1 || true
 	fi
@@ -648,6 +662,7 @@ sysdv_cmd() {
 		--no-records) no_records=1; shift ;;
 		--dry-run) dry=1; shift ;;
 		--confirm) confirm=1; shift ;;
+		--model) SYSDV_MODEL="${2:-}"; shift 2 ;;
 		*) die "unknown argument '$1'" ;;
 		esac
 	done
@@ -895,6 +910,7 @@ run_build_lane() { # run_build_lane <lane> <ids-csv> <ledger> <pin> <root> <chil
 		fi
 		(cd "$wt" && pi --mode json -p --no-session -ne \
 			--tools read,grep,find,ls,bash,write,edit \
+			${BUILD_MODEL:+--model "$BUILD_MODEL"} \
 			--append-system-prompt "$body" \
 			"$(cat "$root/$lane.task")") >>"$log" 2>&1 || true
 	fi
@@ -960,6 +976,7 @@ build_cmd() {
 		--no-records) no_records=1; shift ;;
 		--dry-run) dry=1; shift ;;
 		--confirm) confirm=1; shift ;;
+		--model) BUILD_MODEL="${2:-}"; shift 2 ;;
 		*) die "unknown argument '$1'" ;;
 		esac
 	done

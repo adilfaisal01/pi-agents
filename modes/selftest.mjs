@@ -168,6 +168,8 @@ ok("plan refuses a write outside its scope", r?.block === true);
 ok("plan scope refusal names the allowed paths", String(r?.reason).includes("docs"), String(r?.reason));
 r = await call("write", { path: "docs/ledger.md", content: "# ledger\n" });
 ok("plan writes inside its scope", r === undefined);
+r = await call("write", { path: "ledger.md", content: "# ledger\n" });
+ok("plan writes a ledger at the repo root", r === undefined, String(r?.reason ?? ""));
 r = await call("write", { path: "/etc/passwd", content: "x" });
 ok("plan refuses an absolute path outside the tree", r?.block === true);
 

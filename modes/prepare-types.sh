@@ -5,15 +5,14 @@
 # Types are NOT needed at runtime: pi loads the .ts itself. This is only for editors and
 # for `./check.sh`.
 #
-# The link is made at pi/node_modules (one level above the extensions), not inside an
-# extension directory, so that every extension in this package resolves the same copy —
-# Node's resolution walks upward, and two extensions typechecking against two different
-# copies of the pi types is how a vendored file starts disagreeing with its host.
+# The link is made at the package's own node_modules, so that `tsc -p tsconfig.json` and
+# any editor resolves one copy of the pi types — two checkouts typechecking against two
+# different copies of the host's types is how a source file starts disagreeing with it.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AGENT_DIR="${PI_AGENT_DIR:-$HOME/.pi/agent}"
-TARGET="${PI_TYPES_DIR:-$HERE/../../node_modules}"
+TARGET="${PI_TYPES_DIR:-$HERE/node_modules}"
 
 VERSION="$(cat "$AGENT_DIR/install/current-version" 2>/dev/null || true)"
 if [ -z "$VERSION" ]; then

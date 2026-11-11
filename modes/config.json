@@ -43,7 +43,7 @@
       ],
       "writeScope": [
         "docs",
-        "ledger"
+        "ledger.md"
       ],
       "bash": "safe",
       "keepExtensions": true,
@@ -68,8 +68,7 @@
         "pyproject.toml",
         "pytest.ini",
         "tox.ini",
-        "setup.cfg",
-        "gate/run-tests.sh"
+        "setup.cfg"
       ],
       "bash": "all",
       "keepExtensions": true,
