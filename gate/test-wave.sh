@@ -178,5 +178,39 @@ else
 	ok "a bogus base commit is a usage error" 1
 fi
 
+# --- the derived-artifact list ----------------------------------------------
+# A build cache a lane legitimately produces must never be reported as a write outside its
+# scope, and this list has a twin in the pi-subagent extension. `is_derived` is internal to
+# wave.sh and the only other way to reach it is to run a lane, so the function is lifted out
+# of the script and driven directly: what is checked is the verdict, for the paths where the
+# two lists disagreed before.
+DERIVED_LIB="$STUB_DIR/is_derived.sh"
+sed -n '/^is_derived()/,/^}/p' "$WAVE" >"$DERIVED_LIB"
+[ -s "$DERIVED_LIB" ] && ok "is_derived is extractable from wave.sh" 1 ||
+	ok "is_derived is extractable from wave.sh" 0 "the function was renamed or removed"
+is_d() { ( . "$DERIVED_LIB"; is_derived "$1" ) >/dev/null 2>&1; }
+expect_derived() {
+	if is_d "$1"; then ok "derived: $1" 1; else ok "derived: $1" 0 "reported as a real file"; fi
+}
+expect_real() {
+	if is_d "$1"; then ok "real: $1" 0 "reported as derived"; else ok "real: $1" 1; fi
+}
+for p in \
+	src/__pycache__/app.pyc a/b/__pycache__/x.pyc src/app.pyc \
+	.pytest_cache/v/x a/b/.pytest_cache/v/x .mypy_cache/x a/b/.mypy_cache/x \
+	.ruff_cache/x a/b/.ruff_cache/x \
+	.tox/lib/x.py a/.tox/x.py \
+	.venv/lib/x.py a/b/.venv/x.py venv/x.py a/b/venv/x.py \
+	node_modules/x/i.js a/b/node_modules/x/i.js \
+	.gradle/caches/x a/.gradle/caches/x \
+	pkg.egg-info/PKG-INFO a/b/pkg.egg-info/PKG-INFO pkg.egg-info a/b/pkg.egg-info \
+	.zig-cache/x a/b/.zig-cache/x zig-cache/x a/b/zig-cache/x; do
+	expect_derived "$p"
+done
+for p in src/helper.py dist/bundle.js tests/test_a.py build/out.zig \
+	a/.venvx/x.py a/node_modules_extra/x a/pkg.egg-info.bak/x .toxfoo/x; do
+	expect_real "$p"
+done
+
 printf '\n%s\n' "$([ "$failures" -eq 0 ] && echo "all passed" || echo "$failures failed")"
 [ "$failures" -eq 0 ]

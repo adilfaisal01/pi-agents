@@ -186,13 +186,25 @@ in_scope() {
 }
 
 # Caches a legitimate run produces, which are never the lane's product.
+#
+# This list has a twin: `DERIVED_ARTIFACTS` in the pi-subagent extension, which runs the
+# same check for the lanes it dispatches. The gate spawns its own `pi` children, so the two
+# lists cannot be one — but they must answer the same verdict for the same path, or a lane
+# passes one check and fails the other. Nested caches (a/b/.venv, a/b/pkg.egg-info) and the
+# two ecosystems this repo does not use every day (.tox, .gradle) were the cases where they
+# disagreed; gate/test-wave.sh now pins them.
 is_derived() {
 	case "$1" in
-	__pycache__/* | */__pycache__/* | *.pyc | *.pyo) return 0 ;;
-	.pytest_cache/* | */.pytest_cache/* | .mypy_cache/* | */.mypy_cache/*) return 0 ;;
-	.ruff_cache/* | */.ruff_cache/* | .venv/* | venv/*) return 0 ;;
-	node_modules/* | */node_modules/* | *.egg-info/*) return 0 ;;
-	.zig-cache/* | zig-cache/*) return 0 ;;
+	__pycache__/* | */__pycache__/* | __pycache__ | */__pycache__ | *.pyc | *.pyo) return 0 ;;
+	.pytest_cache/* | */.pytest_cache/*) return 0 ;;
+	.mypy_cache/* | */.mypy_cache/*) return 0 ;;
+	.ruff_cache/* | */.ruff_cache/*) return 0 ;;
+	.tox/* | */.tox/*) return 0 ;;
+	.venv/* | */.venv/* | venv/* | */venv/*) return 0 ;;
+	node_modules/* | */node_modules/*) return 0 ;;
+	.gradle/* | */.gradle/*) return 0 ;;
+	*.egg-info/* | */.egg-info/* | *.egg-info | */.egg-info) return 0 ;;
+	.zig-cache/* | */.zig-cache/* | zig-cache/* | */zig-cache/*) return 0 ;;
 	*) return 1 ;;
 	esac
 }
