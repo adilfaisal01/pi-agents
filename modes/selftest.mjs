@@ -7,15 +7,21 @@
 // tool_result, then asserts the behaviour the docs promise. Node >= 23 runs the .ts
 // entry directly (type stripping), so there is no build step and no test framework.
 
-import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const HERE = path.dirname(new URL(import.meta.url).pathname);
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 // Load the profile from THIS checkout, not from a live ~/.pi/agent install.
 process.env.PI_AGENT_MODES_DIR = HERE;
+// Hermetic: the profile also merges ~/.pi/agent/agent-modes.json, so a real user config
+// on this machine would leak into the assertions (a model set for every project makes
+// "no model configured" false). Point HOME at a throwaway directory before any read.
+const fakeHome = mkdtempSync(path.join(tmpdir(), "agent-modes-home-"));
+process.env.HOME = fakeHome;
+process.env.USERPROFILE = fakeHome;
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 let failures = 0;
 const ok = (name, cond, detail = "") => {
@@ -213,6 +219,7 @@ ok("audit raises a toast", state.toasts.some((t) => t.level === "warning"));
 
 process.chdir(startCwd);
 rmSync(repo.dir, { recursive: true, force: true });
+rmSync(fakeHome, { recursive: true, force: true });
 
 console.log(`\n${failures === 0 ? "all passed" : `${failures} failed`}`);
 process.exit(failures === 0 ? 0 : 1);
