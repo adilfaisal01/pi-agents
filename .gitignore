@@ -1,6 +1,13 @@
 # Node
 node_modules/
 
+# Python
+__pycache__/
+*.pyc
+
+# Review evidence from swarm-gate (per-date JSONL + lane transcripts)
+review-work/
+
 # Build output
 dist/
 build/

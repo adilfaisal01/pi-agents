@@ -23,10 +23,24 @@ otherwise.
 
 ## History commands
 
-```bash
-# Full history of one imported repo
-git log -- v-model-agents/
+Each import is a merge commit whose second parent is the source repository's tip, so
+original history is reachable by SHA. Note that a path-scoped `git log -- <prefix>/`
+shows only the join commit and `git log --follow` does not cross a subtree merge: the
+imported commits contain the files at their original root paths, not under the prefix.
 
-# Follow a file across its original history
-git log --follow -- v-model-agents/modes/index.ts
+```bash
+# The four imported tips, by the SHAs in the table above
+git log --oneline 243e0ae    # v-model-agents
+git log --oneline 92f2068    # code-review-swarm
+git log --oneline 0be7584    # pi-subagent
+git log --oneline a184326    # review-lanes
+
+# Same thing structurally: second parent of each join commit = imported tip
+git log --oneline a156b25^2  # v-model-agents
+git log --oneline 033756d^2  # code-review-swarm
+git log --oneline c1ff905^2  # pi-subagent
+git log --oneline 1db67d5^2  # review-lanes
+
+# Whole workspace, newest first
+git log --oneline
 ```
