@@ -53,28 +53,39 @@ else
 fi
 
 echo
-echo "== contract: build and yolo prompts route the gate =="
+echo "== contract: only yolo runs the gate automatically =="
 PROMPTS=../v-model-agents/modes/prompts
-for prompt in build yolo; do
-	file="$PROMPTS/$prompt.md"
-	if [ ! -f "$file" ]; then
-		fail "$file missing"
-		continue
-	fi
-	if grep -qF 'swarm-gate' "$file"; then
-		pass "$prompt.md names swarm-gate"
+if [ ! -f "$PROMPTS/yolo.md" ]; then
+	fail "$PROMPTS/yolo.md missing"
+else
+	if grep -qF 'swarm-gate' "$PROMPTS/yolo.md"; then
+		pass "yolo.md names swarm-gate"
 	else
-		fail "$prompt.md does not tell the agent to run the gate"
+		fail "yolo.md does not tell the agent to run the gate"
 	fi
 	for code in 0 1 3 4 5 6; do
-		if grep -qE "\`$code\`" "$file"; then
-			pass "$prompt.md handles exit $code"
+		if grep -qE "\`$code\`" "$PROMPTS/yolo.md"; then
+			pass "yolo.md handles exit $code"
 		else
-			fail "$prompt.md does not handle exit $code"
+			fail "yolo.md does not handle exit $code"
 		fi
 	done
-done
-# The gate is path-free on purpose: the prompt must not pin a checkout path.
+fi
+# Build mode is watched, so its review is asked for by hand. A build prompt that names the
+# gate would make the mode pay two model calls per completed change set without being asked.
+if [ -f "$PROMPTS/build.md" ]; then
+	if grep -qF 'swarm-gate' "$PROMPTS/build.md"; then
+		fail "build.md names swarm-gate — build mode asks for the review by hand"
+	else
+		pass "build.md leaves the gate to yolo (manual review only)"
+	fi
+	if grep -qF 'code-review-swarm' "$PROMPTS/build.md"; then
+		pass "build.md points at the skill it asks for by hand"
+	else
+		fail "build.md does not name the skill to invoke manually"
+	fi
+fi
+# The gate is path-free on purpose: no prompt may pin a checkout path.
 if grep -qE '/mnt/|/home/' "$PROMPTS/build.md" "$PROMPTS/yolo.md"; then
 	fail "a mode prompt hardcodes an absolute path"
 else

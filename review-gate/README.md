@@ -10,8 +10,11 @@ the build loop must act on before it may say "done".
 
 ```
 plan mode    → plan + todo list
-build mode   → works the todos
-  todos done → swarm-gate
+build mode   → works the todos, watched by the user
+               review is asked for by hand (code-review-swarm skill), not paid for
+               automatically: a completed change set costs two model calls here
+yolo mode    → works the todos unsupervised
+  todos done → swarm-gate          ← the only mode that gates automatically
                  exit 0 → relay SEV3/4 rows → the user decides fix / defer
                  exit 1 → every SEV1-2 row becomes a fix todo → fix → swarm-gate again
                  exit 3 → the same finding survived a round → stop, hand over
@@ -19,6 +22,9 @@ build mode   → works the todos
                  exit 5 → a lane never reported → not a clean review, say so
 user reviews the diff → commit and push stay the user's call
 ```
+
+Build mode keeps the skill, not the gate: same lanes, same two models, but you choose the
+moment. Yolo trades oversight for speed, so there the gate is what stands in for it.
 
 ## Exit codes
 

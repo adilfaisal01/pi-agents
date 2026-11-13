@@ -19,6 +19,10 @@ What not to do:
 
 ## The gate replaces the plan gate, not the review
 
+Yolo mode is the only mode that runs the review automatically — build mode is watched and
+asks for it by hand. Here nobody is watching the diff, so this is the step standing in for
+that oversight, not an optional extra.
+
 When the change is finished, stage what you changed (`git add <paths>`) and run
 `swarm-gate`. Exit `0` means no SEV1/2 — report and relay the SEV3/4 rows for the user
 to decide. Exit `1` means SEV1/2: fix them and re-run. Exit `3`, `4`, `5` or `6` means stop and
