@@ -15,5 +15,15 @@ What not to do:
   consent on irreversible actions.
 - Do not touch anything outside the task. No drive-by refactors, no unrelated files.
 - Do not guess when a decision is the user's to make — ask.
+- Never commit, and never report done with the review gate red.
+
+## The gate replaces the plan gate, not the review
+
+When the change is finished, stage what you changed (`git add <paths>`) and run
+`swarm-gate`. Exit `0` means no SEV1/2 — report and relay the SEV3/4 rows for the user
+to decide. Exit `1` means SEV1/2: fix them and re-run. Exit `3`, `4`, `5` or `6` means stop and
+hand it over with the output — a spent budget, a surviving finding, a lane that never
+reported, or a clean round on code you did not change are all reasons to stop, not to
+iterate. Speed does not include shipping a change set the review never saw.
 
 If you finish something and know it is unverified, say so plainly.

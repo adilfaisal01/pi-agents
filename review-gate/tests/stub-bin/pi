@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# stub `pi` for swarm-gate tests.
+#
+#   It answers the only question the gate asks of a lane: what did it print? The lens is
+#   identified from the --append-system-prompt body the gate passes, exactly as a real
+#   lane would receive it, so the stub cannot accidentally answer for the wrong lane.
+#
+#   $STUB_DIR/correctness.md and $STUB_DIR/quality.md hold the canned transcript.
+#   $STUB_FAIL=correctness|quality|both makes that lane exit non-zero with a provider error.
+set -uo pipefail
+
+body=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--append-system-prompt)
+			body=$2
+			shift 2
+			;;
+		--model | --tools | --thinking)
+			shift 2
+			;;
+		*) shift ;;
+	esac
+done
+
+[ -n "$body" ] && [ -f "$body" ] || {
+	printf 'stub-pi: no --append-system-prompt body\n' >&2
+	exit 64
+}
+
+# Match the lane's own opening line, quoted exactly from the agent files. A looser match
+# (bare 'correctness') would answer for the wrong lane: the quality lens mentions the
+# correctness lane by name.
+if grep -qF 'You are the **correctness** lane' "$body"; then
+	lane=correctness
+elif grep -qF 'You are the **quality** lane' "$body"; then
+	lane=quality
+else
+	printf 'stub-pi: could not identify the lane from the system prompt\n' >&2
+	exit 66
+fi
+
+case ",${STUB_FAIL:-}," in
+	*,both,* | *,"$lane",*)
+		printf 'stub-pi: 404 model "definitely-not-a-model" not found\n' >&2
+		exit 1
+		;;
+esac
+
+file="$STUB_DIR/$lane.md"
+if [ ! -f "$file" ]; then
+	printf 'stub-pi: no canned output for lane %s (%s)\n' "$lane" "$file" >&2
+	exit 65
+fi
+
+cat "$file"
