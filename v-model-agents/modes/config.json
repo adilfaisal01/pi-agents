@@ -1,0 +1,95 @@
+{
+  "cycleKey": "alt+a",
+  "default": "oracle",
+  "order": [
+    "oracle",
+    "plan",
+    "build",
+    "yolo"
+  ],
+  "modes": {
+    "oracle": {
+      "label": "oracle",
+      "badge": "🔍 oracle",
+      "color": "accent",
+      "tools": [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "bash"
+      ],
+      "dropTools": [
+        "edit",
+        "write",
+        "multiedit",
+        "apply_patch"
+      ],
+      "writeScope": [],
+      "bash": "safe",
+      "keepExtensions": true,
+      "promptFile": "prompts/oracle.md"
+    },
+    "plan": {
+      "label": "plan",
+      "badge": "📋 plan",
+      "color": "warning",
+      "tools": [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "bash"
+      ],
+      "writeScope": [
+        "docs",
+        "ledger.md"
+      ],
+      "bash": "safe",
+      "keepExtensions": true,
+      "promptFile": "prompts/plan.md"
+    },
+    "build": {
+      "label": "build",
+      "badge": "🔨 build",
+      "color": "success",
+      "tools": [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "edit",
+        "write",
+        "bash"
+      ],
+      "writeDeny": [
+        "tests",
+        "conftest.py",
+        "pyproject.toml",
+        "pytest.ini",
+        "tox.ini",
+        "setup.cfg"
+      ],
+      "bash": "all",
+      "keepExtensions": true,
+      "promptFile": "prompts/build.md"
+    },
+    "yolo": {
+      "label": "yolo",
+      "badge": "⚡ yolo",
+      "color": "error",
+      "tools": [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "edit",
+        "write",
+        "bash"
+      ],
+      "bash": "all",
+      "keepExtensions": true,
+      "promptFile": "prompts/yolo.md"
+    }
+  }
+}
