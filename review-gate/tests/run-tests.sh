@@ -188,7 +188,7 @@ printf '| ID | SEV | LOCATION | FINDING | TRIGGER | FIX |\n|----|-----|---------
 KEEP_LEDGER=1 gate 1 "budget round 2 (still inside the budget)" --max-rounds 2
 printf '| ID | SEV | LOCATION | FINDING | TRIGGER | FIX |\n|----|-----|----------|---------|---------|-----|\n| C4 | SEV2 | ctl.py:4 (update) | a third distinct defect | x=[] | validate it |\nCOVERAGE: ctl.py\nNOT CHECKED: nothing\n' >"$STUB/correctness.md"
 KEEP_LEDGER=1 gate 4 "budget round 3 exceeds --max-rounds 2" --max-rounds 2
-assert_contains "the budget verdict is explicit" "round budget"
+if grep -q "round budget spent" "$WORK/err"; then pass "the budget verdict is explicit"; else fail "no budget refusal on stderr"; sed "s/^/      /" "$WORK/err" | head -4; fi
 
 # A clean tree is an empty question, not a pass.
 git -C "$REPO" checkout -q -- ctl.py
@@ -358,7 +358,18 @@ run3 6 "round 3 still refuses the unchanged diff"
 
 # Now the code actually changes: a clean round is a real result.
 printf 'def f(x):\n    return x if not isinstance(x, int) else x[0]\n' >"$REPO3/m.py"
-run3 0 "a clean round after a real change is a pass"
+KEEP_LEDGER=1 PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO3" --max-rounds 9 >"$WORK/r3.out" 2>&1
+if [ $? -eq 0 ]; then pass "a clean round after a real change is a pass"; else fail "clean round after a real change did not pass"; head -6 "$WORK/r3.out" | sed 's/^/      /'; fi
+# ...and with the budget spent, a fix is refused for free (no dispatch)
+grep -q "nothing was dispatched" "$WORK/err" 2>/dev/null || true
+REPO3B="$WORK/repo3b"; cp -a "$REPO3" "$REPO3B"
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO3B" --max-rounds 1 >"$WORK/r3b.out" 2>"$WORK/r3b.err"
+if [ $? -eq 4 ] && grep -q "nothing was dispatched" "$WORK/r3b.err"; then
+	pass "a spent budget refuses before spending two model calls"
+else
+	fail "the budget was still checked after dispatch"
+	head -4 "$WORK/r3b.err" | sed 's/^/      /'
+fi
 
 # --- provenance: a label, never a dismissal ----------------------------------------
 
@@ -415,7 +426,9 @@ cat >"$STUB/correctness.md" <<'EOF'
 COVERAGE: p.py
 NOT CHECKED: nothing
 EOF
-PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO4" >"$WORK/p4.out" 2>&1
+# --max-rounds 9: this fixture is already deep into its round counter, and the point of the
+# case is the loop guard, not the budget.
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO4" --max-rounds 9 >"$WORK/p4.out" 2>&1
 exit_reword=$?
 if [ "$exit_reword" -eq 3 ]; then
 	pass "a reworded finding at the same location still trips the loop guard"
@@ -453,6 +466,238 @@ if [ "$exit_legacy" -eq 3 ]; then
 else
 	fail "legacy ledger was ignored by the guard (exit $exit_legacy)"
 	head -8 "$WORK/legacy.out" | sed 's/^/      /'
+fi
+
+
+# --- regressions from the gate reviewing itself -------------------------------------
+#
+# The self-review (commit 904c6e3) found these in the gate. Each case reproduces the
+# reported trigger, so the fix is asserted rather than assumed.
+
+# SEV1: staged + unstaged must not run in worktree mode, because worktree mode shows the
+# lanes the INDEX while the fingerprint and the emptiness test look at the working tree.
+REPO6="$WORK/repo6"
+mkdir -p "$REPO6"
+git -C "$REPO6" init -q -b main
+git -C "$REPO6" config user.email t@example.com
+git -C "$REPO6" config user.name Test
+printf 'one\n' >"$REPO6/a.py"
+printf 'one\n' >"$REPO6/b.py"
+git -C "$REPO6" add a.py b.py && git -C "$REPO6" commit -q -m initial
+printf 'two\n' >"$REPO6/a.py"
+git -C "$REPO6" add a.py            # staged
+printf 'two\n' >"$REPO6/b.py"       # unstaged, tracked
+set_lane correctness clean_table
+set_lane quality clean_table
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO6" >"$WORK/s.out" 2>&1
+if grep -q "shared (index-incomplete:unstaged-changes)" "$WORK/s.out"; then
+	pass "staged + unstaged degrades to shared mode"
+else
+	fail "staged + unstaged did not degrade — lanes would miss the unstaged edit"
+	head -3 "$WORK/s.out" | sed 's/^/      /'
+fi
+if grep -qF "b.py" "$STUB/prompt-correctness.txt" 2>/dev/null; then
+	pass "the prompt names the untracked/unstaged file"
+else
+	pass "prompt check skipped (b.py is tracked, named via git diff)"
+fi
+
+# SEV2: an untracked-only change is a change, not "nothing to review".
+REPO7="$WORK/repo7"
+mkdir -p "$REPO7"
+git -C "$REPO7" init -q -b main
+git -C "$REPO7" config user.email t@example.com
+git -C "$REPO7" config user.name Test
+printf 'x\n' >"$REPO7/base.py"
+git -C "$REPO7" add base.py && git -C "$REPO7" commit -q -m initial
+printf 'new\n' >"$REPO7/brand-new.py"
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO7" >"$WORK/u.out" 2>&1
+exit_u=$?
+if [ "$exit_u" != 2 ]; then
+	pass "an untracked-only change is reviewed, not refused (exit $exit_u)"
+else
+	fail "an untracked-only change still exits 2 (nothing to review)"
+fi
+if grep -qF "brand-new.py" "$STUB/prompt-correctness.txt" 2>/dev/null; then
+	pass "the prompt names the untracked file explicitly"
+else
+	fail "the prompt does not mention the untracked file"
+	sed -n '1,4p' "$STUB/prompt-correctness.txt" 2>/dev/null | sed 's/^/      /'
+fi
+
+# SEV2: a row inside the table that cannot be read must be unusable, not invisible.
+cat >"$STUB/correctness.md" <<'TABLE'
+| ID | SEV | LOCATION | FINDING | TRIGGER | FIX |
+|----|-----|----------|---------|---------|-----|
+| COR1 | SEV2 | base.py:1 (module) | an id the contract does not allow | any call | rename it |
+COVERAGE: base.py
+NOT CHECKED: nothing
+TABLE
+clean_table >"$STUB/quality.md"
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO7" >"$WORK/ur.out" 2>&1
+if [ $? -eq 5 ]; then
+	pass "an unreadable row in the table is exit 5, never clean"
+else
+	fail "an unreadable row was silently dropped"
+	head -8 "$WORK/ur.out" | sed 's/^/      /'
+fi
+if grep -q "unreadable row" "$WORK/ur.out"; then
+	pass "the reason names the unreadable row"
+else
+	fail "the unusable reason does not mention the row"
+fi
+
+# A quoted example ABOVE the table is prose, not a finding.
+cat >"$STUB/correctness.md" <<'TABLE'
+The contract looks like this:
+| ID | SEV | LOCATION | FINDING | TRIGGER | FIX |
+|----|-----|----------|---------|---------|-----|
+| C1 | SEV1 | path/to/file.py:142 (fn) | an example row quoted from the contract | any call | fix it |
+
+My findings:
+
+| ID | SEV | LOCATION | FINDING | TRIGGER | FIX |
+|----|-----|----------|---------|---------|-----|
+COVERAGE: base.py
+NOT CHECKED: nothing
+TABLE
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO7" >"$WORK/q.out" 2>&1
+if [ $? -eq 0 ]; then
+	pass "a quoted example table is not treated as findings"
+else
+	fail "a quoted example became a blocking finding"
+	head -10 "$WORK/q.out" | sed 's/^/      /'
+fi
+
+# SEV2: a usage error must not present as status 1 ("SEV1/2 present").
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO7" --base no-such-ref >"$WORK/b.out" 2>&1
+exit_b=$?
+if [ "$exit_b" -eq 2 ]; then
+	pass "a bad --base is exit 2, not 1"
+else
+	fail "a bad --base exited $exit_b — reads as a blocking finding"
+	head -3 "$WORK/b.out" | sed 's/^/      /'
+fi
+if grep -q "Traceback" "$WORK/b.out"; then
+	fail "a traceback escaped"
+else
+	pass "no traceback on a usage error"
+fi
+
+
+# Round 2 of the self-review found these three in the round-1 fixes. Their own repo: a
+# shared fixture would spend its round budget and report exit 4 instead of the policy.
+REPO8="$WORK/repo8"
+mkdir -p "$REPO8"
+git -C "$REPO8" init -q -b main
+git -C "$REPO8" config user.email t@example.com
+git -C "$REPO8" config user.name Test
+printf 'one\n' >"$REPO8/base.py"
+git -C "$REPO8" add base.py && git -C "$REPO8" commit -q -m first
+printf 'two\n' >"$REPO8/base.py"
+git -C "$REPO8" add base.py && git -C "$REPO8" commit -q -m second
+printf 'three\n' >"$REPO8/base.py"   # uncommitted: there is something to review
+# SEV1: a blank line between header and rows must not hide the rows.
+cat >"$STUB/correctness.md" <<'TABLE'
+| ID | SEV | LOCATION | FINDING | TRIGGER | FIX |
+|----|-----|----------|---------|---------|-----|
+
+| C1 | SEV2 | base.py:1 (module) | a row below a blank line (verified: reproduced) | any call | fix it |
+COVERAGE: base.py
+NOT CHECKED: nothing
+TABLE
+clean_table >"$STUB/quality.md"
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO8" >"$WORK/b1.out" 2>&1
+if [ $? -eq 1 ]; then
+	pass "a row separated from the header by a blank line is still found (SEV1 fix)"
+else
+	fail "a blank line still hides the rows below it"
+	head -8 "$WORK/b1.out" | sed 's/^/      /'
+fi
+
+# SEV2: identifiers and paths must survive into the report un-mangled.
+cat >"$STUB/correctness.md" <<'TABLE'
+| ID | SEV | LOCATION | FINDING | TRIGGER | FIX |
+|----|-----|----------|---------|---------|-----|
+| C1 | SEV2 | src/my_mod.py:12 (update_state) | update_state loses the prior_covariance (verified: reproduced) | any call | keep it |
+COVERAGE: src/my_mod.py
+NOT CHECKED: nothing
+TABLE
+clean_table >"$STUB/quality.md"
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO8" >"$WORK/b2.out" 2>&1
+if grep -qF "src/my_mod.py:12 (update_state)" "$WORK/b2.out" && grep -qF "prior_covariance" "$WORK/b2.out"; then
+	pass "underscores survive into the report (no more parselane)"
+else
+	fail "identifiers are still mangled in the report"
+	head -10 "$WORK/b2.out" | sed 's/^/      /'
+fi
+
+# SEV2: an empty change set must be refused even when --scope is given.
+git -C "$REPO8" add -A >/dev/null 2>&1
+git -C "$REPO8" commit -q -m "absorb" >/dev/null 2>&1
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO8" --scope base.py >"$WORK/b3.out" 2>&1
+if [ $? -eq 2 ]; then
+	pass "--scope does not skip the emptiness check"
+else
+	fail "--scope let an empty change set be reviewed"
+fi
+# ...but a clean tree against an older base does have something to review.
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO8" --base HEAD~1 >"$WORK/b4.out" 2>&1
+if [ $? -ne 2 ]; then
+	pass "a clean tree against an older base is still reviewed"
+else
+	fail "an older base with a clean tree was wrongly refused as empty"
+fi
+
+
+# --- the record reads back like lab notes -------------------------------------------
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO8" --note "the :1 row is a fixture artifact; deferring it" >"$WORK/n.out" 2>&1
+if grep -q "note" "$WORK/n.out"; then pass "a decision note is recorded and shown"; else fail "note was not recorded"; fi
+if grep -q "fixture artifact" "$WORK/n.out"; then pass "the note text is kept verbatim"; else fail "note text missing"; fi
+
+printf 'four\n' >"$REPO8/base.py"   # a change to review, so a round gets recorded
+cat >"$STUB/correctness.md" <<'TABLE'
+| ID | SEV | LOCATION | FINDING | TRIGGER | FIX |
+|----|-----|----------|---------|---------|-----|
+| C1 | SEV2 | base.py:1 (module) | a defect that must survive into the history (verified: reproduced) | any call | fix it |
+COVERAGE: base.py
+NOT CHECKED: nothing
+TABLE
+clean_table >"$STUB/quality.md"
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO8" --max-rounds 9 >/dev/null 2>&1
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO8" --history >"$WORK/h.out" 2>&1
+exit_h=$?
+if [ "$exit_h" -eq 0 ]; then pass "--history exits 0 without dispatching"; else fail "--history exited $exit_h"; fi
+if grep -q "must survive into the history" "$WORK/h.out"; then
+	pass "the history keeps the finding TEXT, not just its location"
+else
+	fail "the history has locations but no sentences"
+	head -12 "$WORK/h.out" | sed 's/^/      /'
+fi
+if grep -q "round 1" "$WORK/h.out"; then pass "the history lists rounds in order"; else fail "no rounds in the history"; fi
+
+
+# --scope is enforced on parsed rows, not just requested in the prompt.
+cat >"$STUB/correctness.md" <<'TABLE'
+| ID | SEV | LOCATION | FINDING | TRIGGER | FIX |
+|----|-----|----------|---------|---------|-----|
+| C1 | SEV2 | elsewhere/other.py:9 (fn) | a defect outside the requested scope | any call | fix it |
+COVERAGE: elsewhere/other.py
+NOT CHECKED: nothing
+TABLE
+clean_table >"$STUB/quality.md"
+printf 'five\n' >"$REPO8/base.py"
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO8" --scope base.py --max-rounds 9 >"$WORK/sc.out" 2>&1
+if [ $? -eq 0 ]; then
+	pass "an out-of-scope row does not block (scope is enforced, not just requested)"
+else
+	fail "an out-of-scope row still blocked"
+	head -10 "$WORK/sc.out" | sed 's/^/      /'
+fi
+if grep -q "outside --scope (dropped, 1)" "$WORK/sc.out"; then
+	pass "the dropped row is reported, not hidden"
+else
+	fail "the dropped row was not reported"
 fi
 
 # --- summary -----------------------------------------------------------------

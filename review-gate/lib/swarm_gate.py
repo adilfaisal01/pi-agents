@@ -12,7 +12,9 @@ Exit codes
     2  usage error, or nothing to review
     3  loop guard: a SEV1/2 signature survived N consecutive rounds
     4  round budget exhausted with SEV1/2 still open
-    5  a lane is unusable: dispatch failed, no table, or no COVERAGE line
+    5  a lane is unusable: dispatch failed, an unreadable row, no table, or no COVERAGE line
+    6  clean, but on a diff that has not moved since a blocking round — the reviewer
+       sampled differently, so this is not a pass
 
 WHY THE LANES ARE PARSED HERE AND NOT BY THE SKILL. The skill's merge step is model
 judgment (dedupe on "same broken invariant ±3 lines", contradiction handling, quality
@@ -44,6 +46,7 @@ import re
 import shutil
 import subprocess
 import sys
+import fnmatch
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -84,7 +87,8 @@ def run(cmd: list[str], cwd: str | None = None, timeout: float | None = None) ->
 def git(repo: str, *args: str) -> str:
     proc = run(["git", "-C", repo, *args])
     if proc.returncode != 0:
-        raise GateError(2, f"git {' '.join(args)} failed: {proc.stderr.strip()}")
+        detail = (proc.stderr or proc.stdout).strip().splitlines()
+        raise GateError(2, f"git {' '.join(args)} failed: {detail[0] if detail else 'no output'}")
     return proc.stdout.strip()
 
 
@@ -123,7 +127,7 @@ def load_agent(agents_dir: Path, lane: str) -> tuple[str, str]:
 # --- dispatch ----------------------------------------------------------------
 
 
-def lane_prompt(mode: str, sha: str, parent: str, base: str, scope: list[str]) -> str:
+def lane_prompt(mode: str, sha: str, parent: str, base: str, scope: list[str], repo: str) -> str:
     if mode == "worktree":
         # The lane's checkout IS the change, so the diff is against its parent, not HEAD.
         what = (
@@ -131,10 +135,19 @@ def lane_prompt(mode: str, sha: str, parent: str, base: str, scope: list[str]) -
             f"(its parent is {parent[:10]}). Review `git diff {parent} {sha}` and the code it touches."
         )
     else:
+        # Name the untracked files separately: `git diff` cannot show them, so a lane that
+        # only runs the quoted command would silently skip a new file.
+        untracked = untracked_paths(read_tree(repo))
         what = (
             f"Review the uncommitted change in this repository: `git diff {base}` "
             f"(working tree against {base[:10]}), and the code it touches."
         )
+        if untracked:
+            what += (
+                " Also review these untracked files, which `git diff` does not list: "
+                + ", ".join(untracked)
+                + "."
+            )
     where = ""
     if scope:
         where = "Restrict the review to these paths: " + ", ".join(scope) + "."
@@ -233,7 +246,10 @@ def split_row(line: str) -> list[str]:
 
 
 def norm(text: str) -> str:
-    return re.sub(r"[`*_]", "", text).replace("\\", "").strip()
+    # Backticks and asterisks are markup. Underscores are NOT stripped: they are part of
+    # almost every identifier and path this gate prints, and stripping them turned
+    # `parse_lane` into `parselane` and `swarm_gate.py` into `swarmgate.py`.
+    return re.sub(r"[`*]", "", text).replace("\\", "").strip()
 
 
 def parse_lane(lane: str, text: str) -> dict:
@@ -241,54 +257,93 @@ def parse_lane(lane: str, text: str) -> dict:
 
     A lane that emitted no table, or no COVERAGE line, is UNUSABLE — never empty. The
     difference between "nothing found" and "the reviewer never reported" is the only
-    thing a gate must not blur.
+    thing a gate must not blur, and dogfooding found the second half of that promise
+    broken: a row whose ID or SEV did not match the contract was silently dropped while
+    `usable` stayed True, so a lane that DID report a blocking finding could still produce
+    exit 0.
+
+    So the table is located first and parsed as a block: only the contiguous run of pipe
+    rows after the `| ID | SEV |` header is treated as findings (a quoted example in the
+    prose above it is not one), and any row inside that block that cannot be read makes
+    the lane unusable rather than invisible.
     """
     rows: list[dict] = []
     header = False
     coverage: str | None = None
     not_checked: str | None = None
+    unreadable: list[str] = []
+    lines = text.splitlines()
 
-    for line in text.splitlines():
+    # Find the table block, not just a header line: a contract-shaped example quoted in
+    # the prose above the real table is prose. Blocks are contiguous runs of pipe rows;
+    # the LAST block carrying a header is the lane's table, because COVERAGE and
+    # NOT CHECKED always follow it.
+    blocks: list[tuple[int, list[str]]] = []
+    start = 0
+    current: list[str] = []
+    for index, line in enumerate(lines):
+        if line.strip().startswith("|"):
+            if not current:
+                start = index
+            current.append(line)
+        elif current:
+            blocks.append((start, current))
+            current = []
+    if current:
+        blocks.append((start, current))
+
+    header_at = None
+    for start, block in blocks:
+        first = split_row(block[0].strip())
+        if len(first) >= 2 and norm(first[0]).lower() == "id" and norm(first[1]).lower() == "sev":
+            header_at = start  # last header wins: a quoted example sits above the real table
+
+    header = header_at is not None
+    if header_at is not None:
+        # Not just the chosen block: a blank line or a footnote inside the table must not
+        # hide the rows below it. Anything pipe-shaped after the header that will not parse
+        # makes the lane unusable, which is the loud direction.
+        for line in lines[header_at + 1 :]:
+            low = line.strip()
+            if not low.startswith("|"):
+                continue
+            cells = split_row(low)
+            if len(cells) < 2:
+                unreadable.append(low[:80])
+                continue
+            if all(set(c) <= set("-: ") for c in cells if c):
+                continue  # |----|-----|
+            ident, sev_cell = norm(cells[0]), norm(cells[1]).upper()
+            if not ID_RE.match(ident) or not SEV_RE.match(sev_cell):
+                unreadable.append(low[:80])
+                continue
+            location = norm(cells[2]) if len(cells) > 2 else ""
+            finding = norm(cells[3]) if len(cells) > 3 else ""
+            trigger = norm(cells[4]) if len(cells) > 4 else ""
+            fix = norm(cells[5]) if len(cells) > 5 else ""
+            match = LOC_RE.match(location)
+            rows.append(
+                {
+                    "id": ident,
+                    "sev": SEV_RE.match(sev_cell).group(1),
+                    "sev_label": sev_cell,
+                    "location": location,
+                    "path": (match.group("path").strip() if match else ""),
+                    "line": (int(match.group("line")) if match else 0),
+                    "symbol": (match.group("sym") or "").strip() if match else "",
+                    "finding": finding,
+                    "trigger": trigger,
+                    "fix": fix,
+                    "lane": lane,
+                }
+            )
+
+    for line in lines:
         low = line.strip()
         if low.lower().startswith("coverage:"):
             coverage = low.split(":", 1)[1].strip()
-            continue
-        if low.lower().startswith("not checked:"):
+        elif low.lower().startswith("not checked:"):
             not_checked = low.split(":", 1)[1].strip()
-            continue
-        if not low.startswith("|"):
-            continue
-        cells = split_row(low)
-        if len(cells) < 2:
-            continue
-        if cells[0].lower() == "id" and cells[1].lower() == "sev":
-            header = True
-            continue
-        if all(set(c) <= set("-: ") for c in cells if c):
-            continue  # |----|-----|
-        ident, sev_cell = norm(cells[0]), norm(cells[1]).upper()
-        if not ID_RE.match(ident) or not SEV_RE.match(sev_cell):
-            continue
-        location = norm(cells[2]) if len(cells) > 2 else ""
-        finding = norm(cells[3]) if len(cells) > 3 else ""
-        trigger = norm(cells[4]) if len(cells) > 4 else ""
-        fix = norm(cells[5]) if len(cells) > 5 else ""
-        match = LOC_RE.match(location)
-        rows.append(
-            {
-                "id": ident,
-                "sev": SEV_RE.match(sev_cell).group(1),
-                "sev_label": sev_cell,
-                "location": location,
-                "path": (match.group("path").strip() if match else ""),
-                "line": (int(match.group("line")) if match else 0),
-                "symbol": (match.group("sym") or "").strip() if match else "",
-                "finding": finding,
-                "trigger": trigger,
-                "fix": fix,
-                "lane": lane,
-            }
-        )
 
     return {
         "lane": lane,
@@ -296,11 +351,30 @@ def parse_lane(lane: str, text: str) -> dict:
         "coverage": coverage,
         "not_checked": not_checked,
         "rows": rows,
-        "usable": header and coverage is not None,
+        "unreadable": unreadable,
+        "usable": header and coverage is not None and not unreadable,
     }
 
 
-def signature(row: dict, lane_set_size: int) -> str:
+def in_scope(path: str, scope: list[str]) -> bool:
+    """Is this row inside what the caller asked the lanes to look at?
+
+    `--scope` used to reach the lanes only as prompt text, so a lane that ignored it could
+    raise a blocking row outside the requested subtree - the mechanism the gate claims
+    ("mechanical policy over model output") stopped at exactly the boundary it promises.
+    """
+    if not scope:
+        return True
+    for entry in scope:
+        entry = entry.rstrip("/")
+        if not entry:
+            continue
+        if path == entry or path.startswith(entry + "/") or fnmatch.fnmatch(path, entry):
+            return True
+    return False
+
+
+def signature(row: dict) -> str:
     """Exact identity of a finding: location plus the sentence's digest.
 
     Used for dedupe bookkeeping. NOT used by the loop guard on its own: dogfooding showed
@@ -322,7 +396,7 @@ def lineprint(row: dict) -> str:
     set to a human, which is the direction this gate errs in.
     """
     if not row["path"]:
-        return f"noloc:{signature(row, 0)}"
+        return f"noloc:{signature(row)}"
     return f"{row['path']}:{row['line']}"
 
 
@@ -382,6 +456,62 @@ def ensure_ignored(repo: str, work: Path) -> str:
     return "NOT IGNORED — review-work will show as untracked"
 
 
+def append_note(work: Path, change_set: str, text: str) -> Path:
+    """A human decision, recorded in the same stream as the rounds.
+
+    The gate can say what blocked; only a person can say "the :108 row is the FaultLatch
+    contract, defer it to its own change set". Recording that next to the round that raised
+    it is the whole point of keeping this folder.
+    """
+    path = work / f"{today()}.jsonl"
+    append_ledger(
+        path,
+        {
+            "kind": "note",
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "change_set": change_set,
+            "note": text,
+        },
+    )
+    return path
+
+
+def render_history(work: Path, change_set: str) -> str:
+    """The change set as a lab notebook: every round, then every decision, in order."""
+    records = read_prior(work, change_set) if work.is_dir() else []
+    notes = [r for r in read_ledger_files(work, change_set) if r.get("kind") == "note"]
+    lines = [f"change set {change_set[:10]}  ({len(records)} round(s), {len(notes)} note(s))"]
+    for record in records:
+        head = (
+            f"  round {record.get('round')}  exit {record.get('exit')}  {record.get('verdict', '')}"
+            f"  mode {record.get('mode', '')}"
+        )
+        lines.append(head)
+        for finding in record.get("findings") or []:
+            where = f"{finding.get('path')}:{finding.get('line')}" if finding.get("path") else "(no location)"
+            lines.append(
+                f"    SEV{finding.get('sev')} {where} [{finding.get('lane')}]"
+                + (f" [{finding['provenance']}]" if finding.get("provenance") else "")
+            )
+            if finding.get("finding"):
+                lines.append(f"      {finding['finding']}")
+            if finding.get("trigger"):
+                lines.append(f"      trigger: {finding['trigger']}")
+    for note in notes:
+        lines.append(f"  note {note.get('ts', '')}: {note.get('note', '')}")
+    return "\n".join(lines)
+
+
+def read_ledger_files(work: Path, change_set: str) -> list[dict]:
+    """Every record for a change set, notes included, across all date files."""
+    if not work.is_dir():
+        return []
+    out: list[dict] = []
+    for path in sorted(work.glob("*.jsonl")):
+        out.extend(r for r in read_ledger(path) if r.get("change_set") == change_set)
+    return out
+
+
 def read_prior(work: Path, change_set: str) -> list[dict]:
     """Every prior round for this change set, across all date files.
 
@@ -393,7 +523,11 @@ def read_prior(work: Path, change_set: str) -> list[dict]:
         return []
     records: list[dict] = []
     for path in sorted(work.glob("*.jsonl")):
-        records.extend(r for r in read_ledger(path) if r.get("change_set") == change_set)
+        records.extend(
+            r
+            for r in read_ledger(path)
+            if r.get("change_set") == change_set and r.get("kind") != "note"
+        )
     return records
 
 
@@ -464,7 +598,7 @@ def record_locations(record: dict) -> set[str]:
 def seen_count(row: dict, prior: list[dict]) -> int:
     """How many rounds this LOCATION has been flagged in, including this one."""
     spot = lineprint(row)
-    sig = signature(row, 0)
+    sig = signature(row)
     return 1 + sum(
         1
         for record in prior
@@ -495,9 +629,20 @@ def diff_fingerprint(repo: str, base: str) -> str:
     fingerprint unchanged — and a later clean round would then look like a fix of
     unchanged code. `git status --porcelain` carries the untracked names.
     """
-    diff = run(["git", "-C", repo, "diff", base])
-    status = run(["git", "-C", repo, "status", "--porcelain"])
-    return hashlib.sha256((diff.stdout + "\0" + status.stdout).encode()).hexdigest()[:16]
+    digest = hashlib.sha256(run(["git", "-C", repo, "diff", base]).stdout.encode())
+    for code, path in read_tree(repo):
+        digest.update(f"\0{code}\0{path}".encode())
+        if code[0] == "?":
+            # Names alone are not enough: editing the CONTENTS of an untracked file left
+            # the fingerprint byte-identical, so a fixed finding could look unfixed (or a
+            # clean round could look unchanged). (Found by the gate reviewing itself.)
+            target = Path(repo) / path
+            try:
+                if target.is_file() and target.stat().st_size <= 2_000_000:
+                    digest.update(hashlib.sha256(target.read_bytes()).digest())
+            except OSError:
+                digest.update(b"unreadable")
+    return digest.hexdigest()[:16]
 
 
 def decide(
@@ -539,12 +684,60 @@ def decide(
     round_no = len(prior) + 1
     if tripped:
         return 3, f"loop guard: {len(tripped)} location(s) still flagged after {sig_limit} rounds ({', '.join(sorted(tripped))})", tripped
-    if max_rounds and round_no > max_rounds:
+    if max_rounds and round_no > max_rounds:  # normally refused before dispatch
         return 4, f"round budget exhausted ({max_rounds} rounds)", []
     return 1, "sev1/2 present", []
 
 
 # --- prepare -----------------------------------------------------------------
+
+
+def read_tree(repo: str) -> list[tuple[str, str]]:
+    """The working tree, as git sees it, read ONCE.
+
+    Four separate `git status`/`git diff` calls used to answer four questions - is it
+    empty, does the index match the tree, which files are untracked, what is the
+    fingerprint - so one run could prompt, fingerprint and record three different trees on
+    a tree that was changing underneath it. (Found by the gate reviewing itself.)
+    """
+    raw = run(["git", "-C", repo, "status", "--porcelain", "-z"]).stdout
+    entries: list[tuple[str, str]] = []
+    parts = raw.split("\0")
+    index = 0
+    while index < len(parts):
+        part = parts[index]
+        index += 1
+        if not part or len(part) < 4:
+            continue
+        code, path = part[:2], part[3:]
+        entries.append((code, path))
+        if code[0] in "RC":  # a rename carries the original path as the next entry
+            index += 1
+    return entries
+
+
+def untracked_paths(entries: list[tuple[str, str]]) -> list[str]:
+    """Untracked file names, raw. `-z` is what makes this safe: without it git quotes and
+    octal-escapes names containing spaces or non-ASCII, and the prompt then names a file
+    that does not exist."""
+    return [path for code, path in entries if code[0] == "?"]
+
+
+def working_tree_matches_index(repo: str) -> tuple[bool, str]:
+    """Is the index a complete description of the working tree?
+
+    Worktree mode materialises the INDEX (`lane-prepare.sh` writes the staged tree as a
+    commit). So an unstaged edit, or an untracked new file, exists in no lane checkout
+    while still counting in the diff fingerprint and in the nothing-to-review test. The
+    self-review found exactly that: `git add a; edit b` produced worktree mode, lanes that
+    only saw `a`, and a clean verdict for a change nobody reviewed.
+    """
+    for code, _path in read_tree(repo):
+        if code[0] in "?!":
+            return False, "untracked-files"
+        if code[1] != " ":
+            return False, "unstaged-changes"
+    return True, ""
 
 
 def prepare(repo: str, base: str, swarm_root: Path, dry_run: bool) -> dict:
@@ -559,6 +752,12 @@ def prepare(repo: str, base: str, swarm_root: Path, dry_run: bool) -> dict:
         # without the change, so shared mode is the honest choice here, not worktree mode.
         parent = git(repo, "rev-parse", base)
         return {"mode": "shared", "degraded": "unstaged-change", "sha": parent, "parent": parent}
+    complete, why = working_tree_matches_index(repo)
+    if not complete:
+        # The lanes would see the index, the fingerprint sees the working tree. Review the
+        # tree the fingerprint describes, in shared mode, and say why.
+        parent = git(repo, "rev-parse", base)
+        return {"mode": "shared", "degraded": f"index-incomplete:{why}", "sha": parent, "parent": parent}
     if not script.exists():
         parent = git(repo, "rev-parse", base)
         return {"mode": "shared", "degraded": "no-lane-prepare", "sha": parent, "parent": parent}
@@ -639,6 +838,13 @@ def report(payload: dict, rows: list[dict], parsed: list[dict], as_json: bool) -
         if lane["not_checked"]:
             print(f"    skipped: {lane['not_checked']}")
 
+    dropped = head.get("out_of_scope") or []
+    if dropped:
+        print(
+            f"\n-- outside --scope (dropped, {len(dropped)}) --"
+            "\n  " + ", ".join(f"{d['path']}:{d['line']} SEV{d['sev']}" for d in dropped[:8])
+        )
+
     if head.get("ledger"):
         print(f"\nrecorded: {head['ledger']} ({head.get('ignore', '')})")
         if head.get("transcripts"):
@@ -665,6 +871,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--ledger", default="", help="override the ledger file (default <work>/<date>.jsonl)")
     parser.add_argument("--work-dir", default="", help="evidence folder (default <repo>/review-work)")
     parser.add_argument("--no-transcripts", action="store_true", help="do not keep raw lane output")
+    parser.add_argument("--history", action="store_true", help="print this change set's rounds and notes, then exit")
+    parser.add_argument("--note", default="", help="record a decision against this change set, then exit")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="parse and report the plan, dispatch nothing")
     args = parser.parse_args(argv)
@@ -687,15 +895,35 @@ def main(argv: list[str]) -> int:
         print("swarm-gate: pi is not on PATH", file=sys.stderr)
         return 5
 
-    # Nothing to review is not a pass; it is an empty question.
-    if args.base == "HEAD" and run(["git", "-C", repo, "diff", "HEAD", "--quiet"]).returncode == 0:
-        if not args.scope:
-            print("swarm-gate: nothing to review — the working tree matches HEAD", file=sys.stderr)
-            return 2
-
     change_set = git(repo, "rev-parse", args.base)
-    prep = prepare(repo, args.base, swarm_root, args.dry_run)
     work = work_dir(args, repo)
+
+    # Reading the record comes before any question about whether there is a change to
+    # review: a change set that was committed is exactly when you want to read it back.
+    if args.history or args.note:
+        if args.note:
+            path = append_note(work, change_set, args.note)
+            print(f"recorded note in {path}")
+        print(render_history(work, change_set))
+        return 0
+
+    # Nothing to review is not a pass; it is an empty question. Two things make "empty"
+    # non-obvious: `git diff` never lists untracked files (so ask about them), and a clean
+    # working tree is still a change when the base is an older commit (so compare to it).
+    # --scope must not skip this: an empty change set scoped to a path is still empty.
+    dirty = read_tree(repo)
+    if args.base == "HEAD":
+        empty = not dirty
+    else:
+        empty = not dirty and run(["git", "-C", repo, "diff", args.base, "--quiet"]).returncode == 0
+    if empty:
+        print(
+            f"swarm-gate: nothing to review — no change against {args.base}",
+            file=sys.stderr,
+        )
+        return 2
+
+    prep = prepare(repo, args.base, swarm_root, args.dry_run)
     ledger = ledger_path(args, work)
     # --ledger is a complete override: if it moves the writes it must move the reads too,
     # or the round counter restarts at 1 and both the budget and the loop guard go quiet.
@@ -727,7 +955,25 @@ def main(argv: list[str]) -> int:
         report(payload, [], [], args.json)
         return 0
 
-    prompt = lane_prompt(prep["mode"], prep.get("sha", change_set), prep.get("parent", change_set), args.base, args.scope)
+    # Refuse for free. The budget used to be checked after both lanes had already run, so
+    # the last thing paid for was the one thing thrown away. The stop now reports what the
+    # earlier rounds left open, from the ledger, and points at --history.
+    if args.max_rounds and round_no > args.max_rounds:
+        open_locs = sorted(record_locations(prior[-1])) if prior else []
+        print(
+            f"swarm-gate: round budget spent — {len(prior)} round(s) recorded for this change set "
+            f"({args.max_rounds} allowed), so nothing was dispatched.",
+            file=sys.stderr,
+        )
+        if open_locs:
+            print("  still open after the last round: " + ", ".join(open_locs), file=sys.stderr)
+        print("  see every round with: swarm-gate --history", file=sys.stderr)
+        print("  committing ends the change set and resets the budget (with the user's go).", file=sys.stderr)
+        return 4
+
+    prompt = lane_prompt(
+        prep["mode"], prep.get("sha", change_set), prep.get("parent", change_set), args.base, args.scope, repo
+    )
     stem = f"{change_set[:8]}-r{round_no}"
     jobs = []
     for lane in lanes:
@@ -770,12 +1016,16 @@ def main(argv: list[str]) -> int:
         if row["path"]:
             key = (row["sev"], row["path"], row["line"])
         else:
-            key = (row["sev"], "", 0, signature(row, 0))
+            key = (row["sev"], "", 0, signature(row))
         if key in merged:
             merged[key]["lane"] = "both"
             continue
         merged[key] = row
     rows = sorted(merged.values(), key=lambda r: (r["sev"], r["path"], r["line"]))
+
+    out_of_scope = [r for r in rows if r["path"] and not in_scope(r["path"], args.scope)]
+    if out_of_scope:
+        rows = [r for r in rows if not (r["path"] and not in_scope(r["path"], args.scope))]
 
     diff_sha = diff_fingerprint(repo, args.base)
     for row in rows:
@@ -789,7 +1039,15 @@ def main(argv: list[str]) -> int:
         exit_code = 5
         verdict = "lane unusable: " + "; ".join(
             [f"{f['lane']} {f['reason']}" for f in failures]
-            + [f"{p['lane']} {'no table' if not p['header'] else 'no COVERAGE line'}" for p in unusable]
+            + [
+                f"{p['lane']} "
+                + (
+                    f"{len(p['unreadable'])} unreadable row(s): {p['unreadable'][0]}"
+                    if p["unreadable"]
+                    else ("no COVERAGE line" if p["header"] else "no table")
+                )
+                for p in unusable
+            ]
         )
 
     payload = {
@@ -811,8 +1069,12 @@ def main(argv: list[str]) -> int:
         "models": {r["lane"]: r["model"] for r in results},
         "elapsed": {r["lane"]: round(r.get("elapsed", 0), 1) for r in results},
         "findings": rows,
+        "out_of_scope": [
+            {"sev": r["sev"], "path": r["path"], "line": r["line"], "lane": r["lane"]}
+            for r in out_of_scope
+        ],
         "diff_sha": diff_sha,
-        "signatures": sorted({signature(r, 0) for r in rows if r["sev"] in ("1", "2")}),
+        "signatures": sorted({signature(r) for r in rows if r["sev"] in ("1", "2")}),
         "lineprints": sorted({lineprint(r) for r in rows if r["sev"] in ("1", "2")}),
         "tripped": tripped,
         "coverage": {p["lane"]: {"usable": p["usable"], "coverage": p["coverage"], "not_checked": p["not_checked"]} for p in parsed},
@@ -823,12 +1085,50 @@ def main(argv: list[str]) -> int:
     if not args.dry_run:
         record = {k: payload[k] for k in ("repo", "change_set", "sha", "parent", "round", "mode", "degraded", "lanes", "models", "signatures", "lineprints", "verdict", "exit", "diff_sha")}
         record["ts"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-        record["findings"] = [{"sev": r["sev"], "path": r["path"], "line": r["line"], "lane": r["lane"]} for r in rows]
+        # The full rows, not just locations: the record has to be readable months later
+        # without the session that produced it. Locations alone answered "where", never
+        # "what did it say".
+        record["kind"] = "run"
+        record["findings"] = [
+            {
+                "sev": r["sev"],
+                "path": r["path"],
+                "line": r["line"],
+                "lane": r["lane"],
+                "provenance": r.get("provenance", ""),
+                "finding": r.get("finding", ""),
+                "trigger": r.get("trigger", ""),
+            }
+            for r in rows
+        ]
+        record["rounds_allowed"] = args.max_rounds
         append_ledger(ledger, record)
 
     report(payload, rows, parsed, args.json)
     return exit_code
 
 
+def run_cli(argv: list[str]) -> int:
+    """One place where an error becomes an exit code.
+
+    `GateError` is documented as "an exit code rather than a traceback", but only the first
+    `git rev-parse` was wrapped, so any later one - a `--base` naming no ref, a missing
+    agents directory, an unpinnable model - escaped as a traceback that python turns into
+    status 1, which the contract reads as "SEV1/2 present". A usage mistake must never look
+    like a blocking finding.
+    """
+    try:
+        return main(argv)
+    except GateError as exc:
+        print(f"swarm-gate: {exc.message}", file=sys.stderr)
+        return exc.code
+    except KeyboardInterrupt:
+        print("swarm-gate: interrupted", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - last resort, and exit 1 means something else here
+        print(f"swarm-gate: unexpected failure: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(run_cli(sys.argv[1:]))

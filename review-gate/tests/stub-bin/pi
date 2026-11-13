@@ -10,6 +10,7 @@
 set -uo pipefail
 
 body=""
+prompt=""
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 		--append-system-prompt)
@@ -19,7 +20,10 @@ while [ "$#" -gt 0 ]; do
 		--model | --tools | --thinking)
 			shift 2
 			;;
-		*) shift ;;
+		-*)
+			shift
+			;;
+		*) prompt="$1"; shift ;;
 	esac
 done
 
@@ -46,6 +50,12 @@ case ",${STUB_FAIL:-}," in
 		exit 1
 		;;
 esac
+
+# Keep the prompt the gate actually sent, so a test can assert what a lane was told
+# (what a lane is asked to review is a contract, not an implementation detail).
+if [ -n "${STUB_DIR:-}" ]; then
+	printf '%s\n' "$prompt" >"$STUB_DIR/prompt-$lane.txt"
+fi
 
 file="$STUB_DIR/$lane.md"
 if [ ! -f "$file" ]; then

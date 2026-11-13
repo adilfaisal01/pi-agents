@@ -46,6 +46,8 @@ swarm-gate --json                           # machine-readable verdict for the l
 swarm-gate --dry-run                        # show the plan; dispatch nothing
 swarm-gate --work-dir /tmp/review           # evidence elsewhere
 swarm-gate --no-transcripts                 # JSONL only, keep no raw lane output
+swarm-gate --history                        # read this change set back: rounds + notes
+swarm-gate --note "deferred: the :108 row"  # record a decision beside the rounds
 ```
 
 Installed on PATH at `~/.local/bin/swarm-gate` (a symlink; the shim resolves its own
@@ -92,6 +94,29 @@ the one thing it must not do. Committing ends the change set.
   sentence hash misses, and one lane regrading a finding SEV2→dropped while the other kept
   reporting it. Two genuinely different defects on one line across rounds would trip it;
   that hands the change set to a human, which is the direction this gate errs in.
+
+## Reading it back later: `review-work/` as notes
+
+A change set is a small notebook, and `--history` prints it without dispatching anything:
+
+```
+change set 86b10a2aea  (3 round(s), 1 note(s))
+  round 1  exit 1  sev1/2 present  mode shared
+    SEV1 review-gate/lib/swarm_gate.py:552 (prepare) [correctness] [verified]
+      When anything is staged, prepare chooses worktree mode ...
+      trigger: git add ctl.py then edit another tracked file ...
+  round 2  exit 1  ...
+  note 2026-11-12T23:23:00-0500: the :108 row is the FaultLatch contract; own change set
+```
+
+The ledger keeps each round's **finding text and trigger**, not just its location, because
+locations answered "where" and never "what did it say". `--note` appends a human decision
+into the same stream, so the round that raised a finding and the judgement about it sit
+next to each other. Notes never count as rounds: they must not inflate the budget.
+
+When the budget is spent the gate now refuses **before** dispatching - the last thing paid
+for used to be the one thing thrown away - and the refusal names what the last round left
+open plus how to read the rest.
 
 ## Review evidence: `review-work/`
 
