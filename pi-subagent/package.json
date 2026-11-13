@@ -1,0 +1,21 @@
+{
+	"name": "pi-subagent",
+	"version": "0.1.0",
+	"description": "The subagent tool for pi: dispatch named agents in separate processes, with a package-relative agent root and an enforced write scope.",
+	"type": "module",
+	"license": "MIT",
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"subagent",
+		"agents"
+	],
+	"pi": {
+		"extensions": [
+			"./index.ts"
+		]
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*"
+	}
+}
