@@ -127,7 +127,15 @@ def load_agent(agents_dir: Path, lane: str) -> tuple[str, str]:
 # --- dispatch ----------------------------------------------------------------
 
 
-def lane_prompt(mode: str, sha: str, parent: str, base: str, scope: list[str], repo: str) -> str:
+def lane_prompt(
+    mode: str,
+    sha: str,
+    parent: str,
+    base: str,
+    scope: list[str],
+    repo: str,
+    tree: list[tuple[str, str]],
+) -> str:
     if mode == "worktree":
         # The lane's checkout IS the change, so the diff is against its parent, not HEAD.
         what = (
@@ -137,7 +145,7 @@ def lane_prompt(mode: str, sha: str, parent: str, base: str, scope: list[str], r
     else:
         # Name the untracked files separately: `git diff` cannot show them, so a lane that
         # only runs the quoted command would silently skip a new file.
-        untracked = untracked_paths(read_tree(repo))
+        untracked = untracked_paths(tree)
         what = (
             f"Review the uncommitted change in this repository: `git diff {base}` "
             f"(working tree against {base[:10]}), and the code it touches."
@@ -356,7 +364,28 @@ def parse_lane(lane: str, text: str) -> dict:
     }
 
 
-def in_scope(path: str, scope: list[str]) -> bool:
+def normalize_path(value: str, repo: str = "") -> str:
+    """One spelling for a path, so `./lib`, `/abs/repo/lib` and `lib` compare equal.
+
+    Compared raw, `--scope ./lib` against a lane reporting `lib/app.py` classified every
+    row as out of scope and dropped them - a clean verdict for a review that found a SEV1.
+    (Found by the gate reviewing itself.)
+    """
+    text = value.strip()
+    if not text:
+        return ""
+    if repo and os.path.isabs(text):
+        try:
+            text = os.path.relpath(text, repo)
+        except ValueError:
+            pass
+    text = os.path.normpath(text).replace(os.sep, "/")
+    while text.startswith("./"):
+        text = text[2:]
+    return "" if text == "." else text
+
+
+def in_scope(path: str, scope: list[str], repo: str = "") -> bool:
     """Is this row inside what the caller asked the lanes to look at?
 
     `--scope` used to reach the lanes only as prompt text, so a lane that ignored it could
@@ -365,11 +394,12 @@ def in_scope(path: str, scope: list[str]) -> bool:
     """
     if not scope:
         return True
+    target = normalize_path(path, repo)
     for entry in scope:
-        entry = entry.rstrip("/")
+        entry = normalize_path(entry, repo).rstrip("/")
         if not entry:
             continue
-        if path == entry or path.startswith(entry + "/") or fnmatch.fnmatch(path, entry):
+        if target == entry or target.startswith(entry + "/") or fnmatch.fnmatch(target, entry):
             return True
     return False
 
@@ -456,13 +486,17 @@ def ensure_ignored(repo: str, work: Path) -> str:
     return "NOT IGNORED — review-work will show as untracked"
 
 
-def append_note(work: Path, change_set: str, text: str) -> Path:
+def append_note(work: Path, change_set: str, text: str, repo: str = "") -> Path:
     """A human decision, recorded in the same stream as the rounds.
 
     The gate can say what blocked; only a person can say "the :108 row is the FaultLatch
     contract, defer it to its own change set". Recording that next to the round that raised
     it is the whole point of keeping this folder.
     """
+    if repo:
+        # Writing the note into a folder that is not yet excluded leaves `?? review-work/`,
+        # which makes the next run review an empty diff and burn a round. (Self-review.)
+        ensure_ignored(repo, work)
     path = work / f"{today()}.jsonl"
     append_ledger(
         path,
@@ -622,7 +656,33 @@ def provenance(row: dict, prior: list[dict]) -> str:
     return "single-sample, unexecuted" if state == "unverified" else "single-sample"
 
 
-def diff_fingerprint(repo: str, base: str) -> str:
+def content_digest(target: Path, budget: int = 4_000_000, max_files: int = 500) -> bytes:
+    """A digest of what a path CONTAINS, for the change-set fingerprint.
+
+    Size is always included, so an oversized file still moves the fingerprint even when its
+    bytes are only sampled. Directories are walked: `git status` reports `dir/`, not the
+    files inside it.
+    """
+    try:
+        if target.is_dir():
+            digest = hashlib.sha256(b"dir")
+            files = sorted(p for p in target.rglob("*") if p.is_file())[:max_files]
+            for item in files:
+                digest.update(f"\0{item.relative_to(target).as_posix()}\0".encode())
+                digest.update(content_digest(item, budget=budget))
+            return digest.digest()
+        if target.is_file():
+            size = target.stat().st_size
+            digest = hashlib.sha256(str(size).encode())
+            with target.open("rb") as handle:
+                digest.update(handle.read(budget))
+            return digest.digest()
+    except OSError:
+        return b"unreadable"
+    return b"missing"
+
+
+def diff_fingerprint(repo: str, base: str, tree: list[tuple[str, str]]) -> str:
     """Identity of the change under review, including files git diff would not show.
 
     `git diff` omits untracked files, so a new file added without staging would leave the
@@ -630,18 +690,14 @@ def diff_fingerprint(repo: str, base: str) -> str:
     unchanged code. `git status --porcelain` carries the untracked names.
     """
     digest = hashlib.sha256(run(["git", "-C", repo, "diff", base]).stdout.encode())
-    for code, path in read_tree(repo):
+    for code, path in tree:
         digest.update(f"\0{code}\0{path}".encode())
         if code[0] == "?":
             # Names alone are not enough: editing the CONTENTS of an untracked file left
-            # the fingerprint byte-identical, so a fixed finding could look unfixed (or a
-            # clean round could look unchanged). (Found by the gate reviewing itself.)
-            target = Path(repo) / path
-            try:
-                if target.is_file() and target.stat().st_size <= 2_000_000:
-                    digest.update(hashlib.sha256(target.read_bytes()).digest())
-            except OSError:
-                digest.update(b"unreadable")
+            # the fingerprint byte-identical, so a fixed finding could look unfixed. And git
+            # status collapses an untracked DIRECTORY to `dir/`, so a walk is required or a
+            # fix inside a new folder is invisible too. (Both found by self-review.)
+            digest.update(content_digest(Path(repo) / path))
     return digest.hexdigest()[:16]
 
 
@@ -723,7 +779,7 @@ def untracked_paths(entries: list[tuple[str, str]]) -> list[str]:
     return [path for code, path in entries if code[0] == "?"]
 
 
-def working_tree_matches_index(repo: str) -> tuple[bool, str]:
+def working_tree_matches_index(tree: list[tuple[str, str]]) -> tuple[bool, str]:
     """Is the index a complete description of the working tree?
 
     Worktree mode materialises the INDEX (`lane-prepare.sh` writes the staged tree as a
@@ -732,7 +788,7 @@ def working_tree_matches_index(repo: str) -> tuple[bool, str]:
     self-review found exactly that: `git add a; edit b` produced worktree mode, lanes that
     only saw `a`, and a clean verdict for a change nobody reviewed.
     """
-    for code, _path in read_tree(repo):
+    for code, _path in tree:
         if code[0] in "?!":
             return False, "untracked-files"
         if code[1] != " ":
@@ -740,7 +796,7 @@ def working_tree_matches_index(repo: str) -> tuple[bool, str]:
     return True, ""
 
 
-def prepare(repo: str, base: str, swarm_root: Path, dry_run: bool) -> dict:
+def prepare(repo: str, base: str, swarm_root: Path, dry_run: bool, tree: list[tuple[str, str]]) -> dict:
     """Ask lane-prepare.sh for isolated per-lane worktrees; degrade honestly if not."""
     staged = run(["git", "-C", repo, "diff", "--cached", "--quiet"]).returncode != 0
     script = swarm_root / "scripts" / "lane-prepare.sh"
@@ -752,7 +808,7 @@ def prepare(repo: str, base: str, swarm_root: Path, dry_run: bool) -> dict:
         # without the change, so shared mode is the honest choice here, not worktree mode.
         parent = git(repo, "rev-parse", base)
         return {"mode": "shared", "degraded": "unstaged-change", "sha": parent, "parent": parent}
-    complete, why = working_tree_matches_index(repo)
+    complete, why = working_tree_matches_index(tree)
     if not complete:
         # The lanes would see the index, the fingerprint sees the working tree. Review the
         # tree the fingerprint describes, in shared mode, and say why.
@@ -895,14 +951,29 @@ def main(argv: list[str]) -> int:
         print("swarm-gate: pi is not on PATH", file=sys.stderr)
         return 5
 
-    change_set = git(repo, "rev-parse", args.base)
+    base_sha = git(repo, "rev-parse", args.base)
+    head_sha = git(repo, "rev-parse", "HEAD")
+    # The change set is the PAIR (base, HEAD). Rounds accumulate while a fix loop runs on a
+    # stable HEAD, and committing moves HEAD, so the committed diff is a new change set with
+    # a fresh budget. Keying on the base alone made the refusal's own advice false: the base
+    # does not move when you commit, so a change set that spent its budget could never be
+    # re-reviewed at all. (Found by external use on tmr-supervisor, after a commit.)
+    # A default run (base == HEAD) keeps the bare base sha, byte-identical to every ledger
+    # written before this change, so an in-flight loop keeps its round count. A --base run
+    # composes the pair, which is what makes a commit start a new change set.
+    change_set = base_sha if base_sha == head_sha else f"{base_sha[:10]}..{head_sha[:10]}"
+    # One snapshot of the working tree for the whole run. Prompting, fingerprinting and
+    # recording used to each take their own reading, so a tree edited mid-run could be
+    # prompted as one thing, fingerprinted as another and recorded as a third. A change
+    # made during the run is deliberately not seen by it: consistency beats freshness.
+    tree = read_tree(repo)
     work = work_dir(args, repo)
 
     # Reading the record comes before any question about whether there is a change to
     # review: a change set that was committed is exactly when you want to read it back.
     if args.history or args.note:
         if args.note:
-            path = append_note(work, change_set, args.note)
+            path = append_note(work, change_set, args.note, repo)
             print(f"recorded note in {path}")
         print(render_history(work, change_set))
         return 0
@@ -911,7 +982,7 @@ def main(argv: list[str]) -> int:
     # non-obvious: `git diff` never lists untracked files (so ask about them), and a clean
     # working tree is still a change when the base is an older commit (so compare to it).
     # --scope must not skip this: an empty change set scoped to a path is still empty.
-    dirty = read_tree(repo)
+    dirty = tree
     if args.base == "HEAD":
         empty = not dirty
     else:
@@ -923,7 +994,7 @@ def main(argv: list[str]) -> int:
         )
         return 2
 
-    prep = prepare(repo, args.base, swarm_root, args.dry_run)
+    prep = prepare(repo, args.base, swarm_root, args.dry_run, tree)
     ledger = ledger_path(args, work)
     # --ledger is a complete override: if it moves the writes it must move the reads too,
     # or the round counter restarts at 1 and both the budget and the loop guard go quiet.
@@ -958,11 +1029,12 @@ def main(argv: list[str]) -> int:
     # Refuse for free. The budget used to be checked after both lanes had already run, so
     # the last thing paid for was the one thing thrown away. The stop now reports what the
     # earlier rounds left open, from the ledger, and points at --history.
-    if args.max_rounds and round_no > args.max_rounds:
-        open_locs = sorted(record_locations(prior[-1])) if prior else []
+    blocking_rounds = [r for r in prior if record_locations(r)]
+    if args.max_rounds and len(blocking_rounds) >= args.max_rounds:
+        open_locs = sorted(record_locations(blocking_rounds[-1]))
         print(
-            f"swarm-gate: round budget spent — {len(prior)} round(s) recorded for this change set "
-            f"({args.max_rounds} allowed), so nothing was dispatched.",
+            f"swarm-gate: round budget spent — {len(blocking_rounds)} round(s) left SEV1/2 open "
+            f"for this change set ({args.max_rounds} allowed), so nothing was dispatched.",
             file=sys.stderr,
         )
         if open_locs:
@@ -972,7 +1044,13 @@ def main(argv: list[str]) -> int:
         return 4
 
     prompt = lane_prompt(
-        prep["mode"], prep.get("sha", change_set), prep.get("parent", change_set), args.base, args.scope, repo
+        prep["mode"],
+        prep.get("sha", change_set),
+        prep.get("parent", change_set),
+        args.base,
+        args.scope,
+        repo,
+        tree,
     )
     stem = f"{change_set[:8]}-r{round_no}"
     jobs = []
@@ -1025,9 +1103,9 @@ def main(argv: list[str]) -> int:
 
     out_of_scope = [r for r in rows if r["path"] and not in_scope(r["path"], args.scope)]
     if out_of_scope:
-        rows = [r for r in rows if not (r["path"] and not in_scope(r["path"], args.scope))]
+        rows = [r for r in rows if not (r["path"] and not in_scope(r["path"], args.scope, repo))]
 
-    diff_sha = diff_fingerprint(repo, args.base)
+    diff_sha = diff_fingerprint(repo, args.base, tree)
     for row in rows:
         row["provenance"] = provenance(row, prior)
         row["repro"] = repro_state(row)

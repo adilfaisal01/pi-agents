@@ -116,6 +116,43 @@ else
 fi
 
 echo
+echo "== contract: status doc states what is proven and what is not =="
+if [ -f PROTOTYPE.md ] && grep -q "Assumed, not proven" PROTOTYPE.md; then
+	pass "PROTOTYPE.md separates proven from assumed"
+else
+	fail "PROTOTYPE.md missing or does not separate proven from assumed"
+fi
+if grep -qi "severity" PROTOTYPE.md && grep -qi "unstable" PROTOTYPE.md; then
+	pass "PROTOTYPE.md records severity instability"
+else
+	fail "PROTOTYPE.md does not record severity instability"
+fi
+
+echo
+echo "== contract: self-review is frozen and the backlog exists =="
+if [ -f BACKLOG.md ] && grep -q "Self-review is frozen" BACKLOG.md; then
+	pass "BACKLOG.md states the freeze"
+else
+	fail "BACKLOG.md missing or does not state the freeze"
+fi
+if grep -q "Known limits" BACKLOG.md; then
+	pass "BACKLOG.md records the design limits (severity instability, change-set key, absence)"
+else
+	fail "BACKLOG.md has no known-limits section"
+fi
+
+echo
+echo "== contract: one tree snapshot per run =="
+# Four independent readings of a mutable tree meant one run could prompt, fingerprint and
+# record different trees. The snapshot is threaded, so there must be exactly one call site.
+sites=$(grep -n "read_tree(" lib/swarm_gate.py | grep -v "def read_tree" | wc -l)
+if [ "$sites" -eq 1 ]; then
+	pass "one read_tree call site (the snapshot is threaded through)"
+else
+	fail "$sites read_tree call sites — the docstring's 'read ONCE' claim is false again"
+fi
+
+echo
 echo "== tests =="
 if bash tests/run-tests.sh >/tmp/review-gate-tests.out 2>&1; then
 	pass "$(tail -1 /tmp/review-gate-tests.out)"

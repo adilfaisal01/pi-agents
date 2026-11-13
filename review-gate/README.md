@@ -39,10 +39,13 @@ reported" is the one thing a gate must not blur.
 
 ```sh
 swarm-gate                                  # review the working tree against HEAD
+swarm-gate --repo /path/to/repo             # review a repository other than the cwd
 swarm-gate --scope src/shinro/codegen       # restrict the lanes to a subtree
 swarm-gate --lanes correctness              # one lane (cheaper)
 swarm-gate --max-rounds 3 --same-signature-limit 2
 swarm-gate --json                           # machine-readable verdict for the ledger/CI
+swarm-gate --timeout 1800                   # per-lane dispatch timeout (default 900s)
+swarm-gate --agents /path/to/swarm/agents   # override the lane agent files
 swarm-gate --dry-run                        # show the plan; dispatch nothing
 swarm-gate --work-dir /tmp/review           # evidence elsewhere
 swarm-gate --no-transcripts                 # JSONL only, keep no raw lane output
@@ -83,9 +86,17 @@ into the review commit). `--base <ref>` forces shared mode.
 
 ## Rounds, signatures, ledger
 
-The change-set key is `HEAD`. The fix loop happens before any commit, so `HEAD` is stable
-across rounds — keying on the diff instead would reset the budget on every fix, which is
-the one thing it must not do. Committing ends the change set.
+The change-set key is the **(base, HEAD) pair**. During a fix loop `HEAD` is stable, so
+rounds accumulate against a keying on the diff would reset the budget on every fix — the
+one thing it must not do. Committing moves `HEAD`, so the committed diff is a *new* change
+set with a fresh budget.
+
+That pairing exists because the base alone was wrong in practice: a change set that spent
+its budget could never be re-reviewed after being committed, since the base does not move
+when you commit — the refusal's own advice was false. Found by external use, not by
+self-review. A default run (`base == HEAD`) still keys on the bare base sha, so ledgers
+written before this change keep their round counts; a `--base` run composes the pair, which
+means its older records no longer match and those counters restart once.
 
 - `--max-rounds N` (default 3): the Nth+1 run with SEV1/2 still open exits `4`.
 - `--same-signature-limit N` (default 2): a **location** flagged in N consecutive rounds exits

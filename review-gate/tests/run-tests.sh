@@ -13,12 +13,14 @@ HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 GATE="$HERE/../bin/swarm-gate"
 STUB_BIN="$HERE/stub-bin"
 FAILED=0
+FAILED_COUNT=0
 PASSED=0
 
 pass() { printf 'pass  %s\n' "$1"; PASSED=$((PASSED + 1)); }
 fail() {
 	printf 'FAIL  %s\n' "$1"
 	FAILED=1
+	FAILED_COUNT=$((FAILED_COUNT + 1))
 }
 
 # --- fixture -----------------------------------------------------------------
@@ -700,7 +702,148 @@ else
 	fail "the dropped row was not reported"
 fi
 
+
+# --- the four verified blockers from round 1 of the second change set -----------------
+REPO9="$WORK/repo9"
+mkdir -p "$REPO9/lib"
+git -C "$REPO9" init -q -b main
+git -C "$REPO9" config user.email t@example.com
+git -C "$REPO9" config user.name Test
+printf 'x\n' >"$REPO9/lib/app.py"
+git -C "$REPO9" add lib/app.py && git -C "$REPO9" commit -q -m first
+
+# (a) `--scope ./lib` must match a lane reporting `lib/app.py` (both spellings, one path).
+printf 'y\n' >"$REPO9/lib/app.py"
+cat >"$STUB/correctness.md" <<'TABLE'
+| ID | SEV | LOCATION | FINDING | TRIGGER | FIX |
+|----|-----|----------|---------|---------|-----|
+| C1 | SEV1 | lib/app.py:1 (module) | an in-scope defect that must not be dropped | any call | fix it |
+COVERAGE: lib/app.py
+NOT CHECKED: nothing
+TABLE
+clean_table >"$STUB/quality.md"
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO9" --scope ./lib --max-rounds 9 >"$WORK/s9.out" 2>&1
+if [ $? -eq 1 ]; then
+	pass "--scope ./lib keeps lib/app.py in scope (exit 1, not a clean 0)"
+else
+	fail "a dotted scope entry dropped an in-scope blocking row"
+	head -8 "$WORK/s9.out" | sed 's/^/      /'
+fi
+
+# (b) a note must not leave the work folder unignored on a repo that has never seen it.
+REPO10="$WORK/repo10"
+mkdir -p "$REPO10"
+git -C "$REPO10" init -q -b main
+git -C "$REPO10" config user.email t@example.com
+git -C "$REPO10" config user.name Test
+printf 'z\n' >"$REPO10/f.py"
+git -C "$REPO10" add f.py && git -C "$REPO10" commit -q -m first
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO10" --note "a decision on a clean tree" >"$WORK/n10.out" 2>&1
+if git -C "$REPO10" check-ignore -q "review-work/x.jsonl"; then
+	pass "--note leaves the work folder ignored"
+else
+	fail "--note wrote into an unignored folder"
+fi
+if [ -z "$(git -C "$REPO10" status --porcelain | grep review-work)" ]; then
+	pass "the repo stays clean after --note"
+else
+	fail "review-work shows up in git status after --note"
+fi
+
+# (c) fixing a file inside an untracked directory must move the fingerprint.
+REPO11="$WORK/repo11"
+mkdir -p "$REPO11"
+git -C "$REPO11" init -q -b main
+git -C "$REPO11" config user.email t@example.com
+git -C "$REPO11" config user.name Test
+printf 'q\n' >"$REPO11/t.py"
+git -C "$REPO11" add t.py && git -C "$REPO11" commit -q -m first
+mkdir -p "$REPO11/newdir"
+printf 'v1\n' >"$REPO11/newdir/mod.py"
+fp1=$(cd "$REPO11" && python3 -c "import sys; sys.path.insert(0,'$HERE/../lib'); import swarm_gate as g; print(g.diff_fingerprint('.', 'HEAD', g.read_tree('.')))")
+printf 'v2 fixed\n' >"$REPO11/newdir/mod.py"
+fp2=$(cd "$REPO11" && python3 -c "import sys; sys.path.insert(0,'$HERE/../lib'); import swarm_gate as g; print(g.diff_fingerprint('.', 'HEAD', g.read_tree('.')))")
+if [ "$fp1" != "$fp2" ]; then
+	pass "an edit inside an untracked directory changes the fingerprint"
+else
+	fail "untracked directory contents are still invisible to the fingerprint ($fp1)"
+fi
+# ...and a file above the sample budget still contributes its size.
+head -c 5000000 /dev/zero >"$REPO11/newdir/big.bin"
+fp3=$(cd "$REPO11" && python3 -c "import sys; sys.path.insert(0,'$HERE/../lib'); import swarm_gate as g; print(g.diff_fingerprint('.', 'HEAD', g.read_tree('.')))")
+printf 'x' >>"$REPO11/newdir/big.bin"
+fp4=$(cd "$REPO11" && python3 -c "import sys; sys.path.insert(0,'$HERE/../lib'); import swarm_gate as g; print(g.diff_fingerprint('.', 'HEAD', g.read_tree('.')))")
+if [ "$fp3" != "$fp4" ]; then
+	pass "an oversized untracked file still moves the fingerprint"
+else
+	fail "an oversized file contributed nothing"
+fi
+
+# (d) a spent budget must not refuse a run that a clean round would settle, or exit 6
+# becomes unreachable. Budget counts rounds that LEFT SEV1/2 OPEN, not all rounds.
+REPO12="$WORK/repo12"
+mkdir -p "$REPO12"
+git -C "$REPO12" init -q -b main
+git -C "$REPO12" config user.email t@example.com
+git -C "$REPO12" config user.name Test
+printf 'a\n' >"$REPO12/w.py"
+git -C "$REPO12" add w.py && git -C "$REPO12" commit -q -m first
+printf 'b\n' >"$REPO12/w.py"
+cat >"$STUB/correctness.md" <<'TABLE'
+| ID | SEV | LOCATION | FINDING | TRIGGER | FIX |
+|----|-----|----------|---------|---------|-----|
+| C1 | SEV2 | w.py:1 (module) | a blocking finding (verified: reproduced) | any call | fix it |
+COVERAGE: w.py
+NOT CHECKED: nothing
+TABLE
+clean_table >"$STUB/quality.md"
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO12" --max-rounds 2 >/dev/null 2>&1   # round 1: blocks
+clean_table >"$STUB/correctness.md"
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO12" --max-rounds 2 >"$WORK/b12a.out" 2>&1
+exit_a=$?
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO12" --max-rounds 2 >"$WORK/b12b.out" 2>&1
+exit_b=$?
+if [ "$exit_a" -eq 6 ] && [ "$exit_b" -eq 6 ]; then
+	pass "exit 6 stays reachable after a blocking round, twice"
+else
+	fail "exit 6 was refused as a budget stop (round2=$exit_a, round3=$exit_b)"
+	head -4 "$WORK/b12b.out" | sed 's/^/      /'
+fi
+
+
+# A commit must start a new change set. Keying on the base alone made the refusal's own
+# advice ("committing ends the change set") false: the base does not move when you commit,
+# so a change set that spent its budget could never be re-reviewed. (Found by external use
+# on tmr-supervisor, after committing an amendment.)
+REPO13="$WORK/repo13"
+mkdir -p "$REPO13"
+git -C "$REPO13" init -q -b main
+git -C "$REPO13" config user.email t@example.com
+git -C "$REPO13" config user.name Test
+printf 'a\n' >"$REPO13/r.py"
+git -C "$REPO13" add r.py && git -C "$REPO13" commit -q -m first
+printf 'b\n' >"$REPO13/r.py"
+cat >"$STUB/correctness.md" <<'TABLE'
+| ID | SEV | LOCATION | FINDING | TRIGGER | FIX |
+|----|-----|----------|---------|---------|-----|
+| C1 | SEV2 | r.py:1 (module) | a blocking finding (verified: reproduced) | any call | fix it |
+COVERAGE: r.py
+NOT CHECKED: nothing
+TABLE
+clean_table >"$STUB/quality.md"
+BASE13=$(git -C "$REPO13" rev-parse HEAD)
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO13" --max-rounds 1 >/dev/null 2>&1   # spends the budget
+git -C "$REPO13" add -A >/dev/null 2>&1
+git -C "$REPO13" commit -q -m "the change"
+PATH="$STUB_BIN:$PATH" STUB_DIR="$STUB" "$GATE" --repo "$REPO13" --base "$BASE13" --max-rounds 1 >"$WORK/cs.out" 2>"$WORK/cs.err"
+if grep -q "round 1/" "$WORK/cs.out" && ! grep -q "budget spent" "$WORK/cs.err"; then
+	pass "committing starts a new change set (the committed diff is reviewable again)"
+else
+	fail "a committed change set is still refused by its old budget"
+	head -3 "$WORK/cs.out" | sed 's/^/      /'; head -2 "$WORK/cs.err" | sed 's/^/      /'
+fi
+
 # --- summary -----------------------------------------------------------------
 
-printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED"
+printf '\n%d passed, %d failed\n' "$PASSED" "$FAILED_COUNT"
 [ "$FAILED" -eq 0 ]
