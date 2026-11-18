@@ -51,7 +51,12 @@ Two things worth knowing after an npm install:
   replaces them. For a change that survives an update, copy the two lane files into
   `~/.pi/agent/agents/`, edit them there — the `subagent` tool prefers user agents by name
   — and run `swarm-gate --agents ~/.pi/agent/agents`.
-- **`swarm-gate` needs `python3`** and **`review-lanes` needs `git`**; neither needs `pi`.
+- **`swarm-gate` needs `python3`, `git` and `pi`.** With `pi` off `PATH` it exits `5` before
+  any lane is dispatched: the same code the contract reserves for "a lane is unusable",
+  reused here for a pre-dispatch refusal — which also blocks `--history` and `--note` (a
+  known limit, see `review-gate/BACKLOG.md`). `--dry-run` still plans the lanes without
+  `pi`. **`review-lanes` needs `git` and `python3`** — it runs a Python snippet to assert
+  where a package resolves from — and `uv` only for `--install`.
 
 ### From a checkout
 
@@ -101,6 +106,29 @@ code-review-swarm/scripts/install.sh check                     # fails until bot
 Two *different* ids is the point: two prompts on one model share blind spots. Both checks
 warn — rather than fail, since a single-model run is a documented fallback — when the two
 lanes pin the same id.
+
+## Optional: a todo tool
+
+This workspace does not bundle one, and **no prompt here consults a list**: yolo mode runs
+`swarm-gate` "when the change is finished", whether or not a todo exists. A todo tool is
+per-session scratch space the model writes to — not a trigger.
+
+It is still the natural place to keep the fix items the gate hands back — `review-gate`'s
+README turns every SEV1/SEV2 row into a *fix todo* on exit `1` — and that list is easier to
+follow when the model has somewhere to write it.
+
+If you don't already have one,
+[`@juicesharp/rpiv-todo`](https://github.com/juicesharp/rpiv-mono/tree/main/packages/rpiv-todo)
+(MIT, third-party, not vendored here) gives the model a `todo` tool, rendered as a live
+overlay that survives `/reload` and compaction:
+
+```bash
+pi install npm:@juicesharp/rpiv-todo
+```
+
+It is not part of `@adilfaisal01/pi-agents`, so the install above does not pull it in, and
+installing it changes nothing on its own — you (or a prompt you write) drive the loop, and
+the gate fires on a finished change either way.
 
 ## Verifying a checkout
 

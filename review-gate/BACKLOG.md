@@ -21,6 +21,7 @@ Rows below are the ones with a design consequence.
 | SEV3 | `main:961` | The "refuse for free" budget check runs *after* `prepare()`, which may invoke `lane-prepare.sh` and materialise worktrees. No model calls are spent, but the refusal is not entirely free. | `904c6e35` r1 |
 | SEV3 | budget refusal | It prints the **last round's** locations, which may have moved since. Observed: it named `tests/test_channel.py:387` after those tests had been moved to `tests/test_channel_tick.py`. The text says "after the last round", so it is accurate as history, but it reads as a live worklist. | external use, change set `7b6ce45` r4 |
 | SEV3 | `swarm_gate.py:4` | The usage synopsis omits `--work-dir`, `--no-transcripts`, `--history` and `--note`; README documents them. | `904c6e35` r1 |
+| SEV4 | `report` | `--dry-run` still prints `recorded: <ledger path>` although nothing was written (no `review-work/` is created), so it reads as if a round had been banked. | `0714f4a2` r1 |
 | SEV3 | `main:894` | `shutil.which("pi")` is checked before the `--history`/`--note` early exit, so a read-only command returns 5 ("a lane is unusable") on a machine without `pi`. | `904c6e35` r1 |
 | SEV4 | `lane_prompt:140` | The untracked-file list injected into the prompt ignores `--scope`, while `in_scope` filters those same rows out afterwards: the prompt asks for files the verdict then drops. | `904c6e35` r1 |
 | SEV4 | `in_scope:359` | Mixes prefix matching with `fnmatch` (whose `*` crosses `/`); `--scope`'s help documents neither. | `904c6e35` r1 |

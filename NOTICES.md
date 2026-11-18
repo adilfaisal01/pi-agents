@@ -22,6 +22,10 @@ README is kept in-tree as `pi-subagent/UPSTREAM-README.md`; licence terms are in
 original files. Everything else here is original work by Adil Faisal unless a file says
 otherwise.
 
+**Recommended, not vendored:** the README points at `@juicesharp/rpiv-todo` (MIT,
+`juicesharp/rpiv-mono`) as an optional todo tool. Nothing from it is copied into this
+tree, it is not a dependency of the published package, and no prompt here refers to it.
+
 ## History commands
 
 Each import is a merge commit whose second parent is the source repository's tip, so
