@@ -17,3 +17,11 @@ build/
 
 # Logs
 *.log
+
+# npm pack output
+*.tgz
+
+# Credentials — never in the tree. The publish token lives in ~/.npmrc (0600) and,
+# if CI needs it, in the repository secret; not here.
+.npmrc
+.env

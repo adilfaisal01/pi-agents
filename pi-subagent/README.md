@@ -15,6 +15,7 @@ readable.
 | 2 | `agentSource` gains `package`, the label for agents found there |
 | 3 | a **write-scope post-check**: after a child exits cleanly its worktree is inspected, and the run fails if anything outside the agent's declared `write_scope` moved |
 | 4 | the child does not inherit the parent's extensions (`-ne`), so a mode guard loaded here cannot strip the tools the agent declares |
+| 5 | `pi.agents` in the package manifest, plus the manifest one directory up — so a **bundle** (one npm package holding several extensions) can ship agents without copying them into `agents/` |
 
 ## Why the package agents root
 
@@ -25,6 +26,27 @@ discover it. A consumer that keeps its agents somewhere else points
 
 Precedence, lowest first: **package → user (`~/.pi/agent/agents`) → project
 (`<nearest>/.pi/agents`)**. Anything a user writes wins by name.
+
+### Bundle layout (`pi.agents`)
+
+A package that ships this extension *and* other resources usually puts it one directory
+down, so the agent files are not inside `pi-subagent/`. Declare them in the root manifest,
+package-relative, the same way `pi.skills` works:
+
+```json
+{
+  "pi": {
+    "extensions": ["./pi-subagent/index.ts"],
+    "agents": ["./code-review-swarm/agents"]
+  }
+}
+```
+
+`pi` itself reads only `extensions`, `skills`, `prompts` and `themes` from that manifest and
+ignores `agents`; this extension reads it. Discovery checks the module's own `agents/` plus
+`pi.agents` in `<this dir>/package.json` and `<parent>/package.json`, so the same code works
+from a checkout and from an installed bundle. `PI_SUBAGENT_PACKAGE_AGENTS` still overrides
+all of it with a single directory.
 
 ## `write_scope`
 

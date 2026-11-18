@@ -43,8 +43,8 @@ or its CI invocation — so that every future green means less than the last one
    suite has nothing to do.
 2. **Green per lane is not done.** Done is the composed gate (`docs/02`).
 3. **Shared generated paths serialize.** Two lanes whose changes reach
-   `graph_data.zig`, `codegen/emosqp/`, `.zig-cache/`, or `build/` are one lane, or they
-   race. Disjoint *source* paths is not sufficient.
+   a checked-in generated source, a codegen output directory, `.zig-cache/`, or `build/`
+   are one lane, or they race. Disjoint *source* paths is not sufficient.
 4. **Stop instead of contorting.** If the frozen test is wrong, stop and say which row,
    which assertion, and what the spec should say. Implementing against a wrong test is
    the one outcome that must never look like success.

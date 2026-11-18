@@ -11,6 +11,8 @@ set -uo pipefail
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 LANES=(review-correctness review-quality)
 FAILED=0
+# The pin checks are shared with install.sh, so the two cannot disagree on a model id.
+. "$ROOT/scripts/check-models.sh"
 
 usage() {
 	printf 'usage: %s [--live] [--lane <name>]\n' "${0##*/}" >&2
@@ -59,7 +61,7 @@ agent_body() {
 ## Static checks ---------------------------------------------------------------
 
 check_static() {
-	local file name desc model tools body prov want_id wscope
+	local file name desc model tools body wscope models=()
 	for lane in "${LANES[@]}"; do
 		file="$ROOT/agents/$lane.md"
 		if [ ! -f "$file" ]; then
@@ -69,7 +71,7 @@ check_static() {
 
 		name=$(frontmatter_field "$file" name)
 		desc=$(frontmatter_field "$file" description)
-		model=$(frontmatter_field "$file" model)
+		model=$(lane_model "$file")
 		tools=$(frontmatter_field "$file" tools)
 
 		[ "$name" = "$lane" ] && pass "$lane: frontmatter name" || fail "$lane: frontmatter name is '$name'"
@@ -77,19 +79,15 @@ check_static() {
 		[ -n "$model" ] && pass "$lane: model $model" || fail "$lane: no model pinned"
 
 		if [ -n "$model" ]; then
-			# Exact match on both columns: --list-models fuzzy-matches, so a substring
-			# test would pass on a lookalike (kimi-k2.6 vs kimi-k3) and hide a typo.
-			prov=${model%%/*}
-			if [ "$prov" = "$model" ]; then
-				prov=""
-				want_id=$model
-			else
-				want_id=${model#*/}
-			fi
-			if pi --list-models "$model" 2>/dev/null | awk -v p="$prov" -v m="$want_id" '
-				NR > 1 && $2 == m && (p == "" || $1 == p) { found = 1 }
-				END { exit !found }
-			'; then
+			models+=("$(lane_model_lookup "$model")")
+			# The registry is the *operator's*: a CI runner or a fresh clone has no
+			# providers configured, so "unresolvable here" is not a defect. A pin this
+			# install HAS but does not know is a defect, and still fails.
+			if [ "${PI_MODEL_CHECK:-}" = "skip" ]; then
+				printf 'skip  %s: model %s not checked (PI_MODEL_CHECK=skip)\n' "$lane" "$model"
+			elif ! command -v pi >/dev/null 2>&1; then
+				printf 'skip  %s: model %s not checked (no pi on PATH)\n' "$lane" "$model"
+			elif model_resolves "$model"; then
 				pass "$lane: $model resolves"
 			else
 				fail "$lane: $model not in the model registry"
@@ -125,6 +123,10 @@ check_static() {
 			*) fail "$lane: output contract has no TRIGGER column" ;;
 		esac
 	done
+
+	if [ "${#models[@]}" -eq 2 ]; then
+		single_model_warning "${models[0]}" "${models[1]}" || true
+	fi
 
 	skill="$ROOT/skills/code-review-swarm/SKILL.md"
 	if [ -f "$skill" ] && [ -n "$(frontmatter_field "$skill" name)" ] && [ -n "$(frontmatter_field "$skill" description)" ]; then
@@ -278,7 +280,7 @@ check_live() {
 			continue
 		fi
 		local model
-		model=$(frontmatter_field "$ROOT/agents/$lane.md" model)
+		model=$(lane_model "$ROOT/agents/$lane.md")
 		if [ -z "$model" ]; then
 			fail "$lane: cannot dispatch without a model"
 			continue
@@ -303,10 +305,12 @@ check_live() {
 
 ## Main -----------------------------------------------------------------------
 
-command -v pi >/dev/null 2>&1 || {
-	printf 'FAIL  pi not on PATH\n' >&2
+# `--live` spawns pi children, so it needs pi. The static checks do not: a clone or a CI
+# runner without pi can still verify the lane contracts.
+if [ "$LIVE" -eq 1 ] && ! command -v pi >/dev/null 2>&1; then
+	printf 'FAIL  pi not on PATH, and --live dispatches the lanes\n' >&2
 	exit 1
-}
+fi
 
 check_static
 

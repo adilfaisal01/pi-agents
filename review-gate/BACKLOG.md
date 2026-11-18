@@ -19,7 +19,7 @@ Rows below are the ones with a design consequence.
 |---|---|---|---|
 | SEV3 | `--history` / `--note` | They ignore `--ledger`. A normal run honours the override for reads and writes; history reads the work folder instead, so it reports `0 round(s)` when the rounds live in the override file, and a note lands in a different stream. | change set `904c6e35` r1 |
 | SEV3 | `main:961` | The "refuse for free" budget check runs *after* `prepare()`, which may invoke `lane-prepare.sh` and materialise worktrees. No model calls are spent, but the refusal is not entirely free. | `904c6e35` r1 |
-| SEV3 | budget refusal | It prints the **last round's** locations, which may have moved since. Observed: it named `tests/test_channel.py:387` after those tests had been moved to `tests/test_channel_tick.py`. The text says "after the last round", so it is accurate as history, but it reads as a live worklist. | tmr-supervisor `7b6ce45` r4 |
+| SEV3 | budget refusal | It prints the **last round's** locations, which may have moved since. Observed: it named `tests/test_channel.py:387` after those tests had been moved to `tests/test_channel_tick.py`. The text says "after the last round", so it is accurate as history, but it reads as a live worklist. | external use, change set `7b6ce45` r4 |
 | SEV3 | `swarm_gate.py:4` | The usage synopsis omits `--work-dir`, `--no-transcripts`, `--history` and `--note`; README documents them. | `904c6e35` r1 |
 | SEV3 | `main:894` | `shutil.which("pi")` is checked before the `--history`/`--note` early exit, so a read-only command returns 5 ("a lane is unusable") on a machine without `pi`. | `904c6e35` r1 |
 | SEV4 | `lane_prompt:140` | The untracked-file list injected into the prompt ignores `--scope`, while `in_scope` filters those same rows out afterwards: the prompt asks for files the verdict then drops. | `904c6e35` r1 |
@@ -37,7 +37,7 @@ learned to keep the sentences only afterwards. Their full text is in
 
 1. **`change_set` was the base commit; it is now the (base, HEAD) pair.** The base alone made
    the refusal's advice false: committing does not move the base, so a change set that spent
-   its budget could never be re-reviewed. Fixed after external use hit it (tmr-supervisor
+   its budget could never be re-reviewed. Fixed after external use hit it (change set
    `7b6ce45`, where the amendment commit was refused by its own predecessor's budget).
    Residual: two workstreams on one base *and* one HEAD still share a counter — a conflation,
    but a much narrower one.

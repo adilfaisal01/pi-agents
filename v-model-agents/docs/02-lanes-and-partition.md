@@ -26,10 +26,10 @@ one lane.
    assumptions, and no build can satisfy both. **The interface is the hard
    serialization point.**
 3. **Disjoint generated-path ownership.** Generated files that are rewritten in place —
-   `graph_data.zig`, `codegen/emosqp/`, `.zig-cache/`, `build/` — are shared state. In a
-   single checkout they are "overwritten by whichever generator ran last", so a parallel
-   wave produces nondeterministic artifacts. Each lane gets its own worktree, or the
-   lanes serialize.
+   a checked-in generated source, a codegen output directory, a build cache — are shared
+   state. In a single checkout they are "overwritten by whichever generator ran last",
+   so a parallel wave produces nondeterministic artifacts. Each lane gets its own
+   worktree, or the lanes serialize.
 4. **No shared scarce device.** One board, one robot, one serial port: hardware steps
    queue on a mutex. Parallelism is for the dev host.
 
@@ -110,8 +110,8 @@ The lane split is an artifact, not a conversation. It belongs in the plan output
 ```markdown
 | lane | rows | write scope | interface touched | generated paths | serialized behind |
 | --- | --- | --- | --- | --- | --- |
-| L1 | R1, R2 | src/shinro/controllers/ | none | none | — |
-| L2 | R3 | src/shinro/runtime/ | C-ABI ports | graph_data.zig | L1 (interface) |
+| L1 | R1, R2 | src/controllers/ | none | none | — |
+| L2 | R3 | src/runtime/ | C-ABI ports | generated/graph.zig | L1 (interface) |
 | L3 | R4 | tests-only fix | none | none | hardware queue |
 ```
 

@@ -3,6 +3,9 @@ name: review-correctness
 description: Correctness lens for a two-model code review. Finds logic errors, undefined behaviour, memory faults, boundary and edge-case failures, API misuse, race conditions, float error, and cites file:line and symbol for each. Read-only.
 tools: read, grep, find, ls, bash
 write_scope: review
+# The id below is an example from one setup. Replace it with a provider/id you have
+# (`pi --list-models`); scripts/install.sh check fails until it resolves. See README,
+# "Set the two models first".
 model: ollama-cloud/mimo-v2.6-flash
 ---
 

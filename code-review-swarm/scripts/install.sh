@@ -13,10 +13,50 @@ set -euo pipefail
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 AGENT_DIR="${PI_AGENT_DIR:-$HOME/.pi/agent}/agents"
 LANES=(review-correctness review-quality)
+# The pin checks are shared with selftest.sh, so the two commands cannot disagree.
+. "$ROOT/scripts/check-models.sh"
 
 usage() {
 	printf 'usage: %s [install|check|uninstall] [--force]\n' "${0##*/}" >&2
 	exit 2
+}
+
+# A lane whose model this install cannot resolve dispatches nothing. Say so here, where
+# the fix is one edit away, rather than at dispatch time as a provider 404.
+check_models() {
+	if ! command -v pi >/dev/null 2>&1; then
+		printf 'FAIL  model ids: pi is not on PATH\n'
+		rc=1
+		return 0 # under `set -e`: report through rc, do not abort the link check
+	fi
+	local lane file model
+	local pinned=()
+	for lane in "${LANES[@]}"; do
+		file="$ROOT/agents/$lane.md"
+		if [ ! -f "$file" ]; then
+			printf 'FAIL  %s: agents/%s.md is missing\n' "$lane" "$lane"
+			rc=1
+			continue
+		fi
+		model=$(lane_model "$file" || true)
+		if [ -z "$model" ]; then
+			printf 'FAIL  %s: no model pinned — the gate will not pick one\n' "$lane"
+			rc=1
+			continue
+		fi
+		pinned+=("$(lane_model_lookup "$model")")
+		if model_resolves "$model"; then
+			printf 'ok    %s: %s resolves\n' "$lane" "$model"
+		else
+			printf 'FAIL  %s: %s is not in this install'"'"'s model registry\n' "$lane" "$model"
+			printf '      set model: in agents/%s.md to a provider/id you have:\n' "$lane"
+			printf '        pi --list-models\n'
+			rc=1
+		fi
+	done
+	if [ "${#pinned[@]}" -eq 2 ]; then
+		single_model_warning "${pinned[0]}" "${pinned[1]}" || true
+	fi
 }
 
 MODE=install
@@ -32,9 +72,12 @@ done
 
 [ "$MODE" = status ] && MODE=check
 
-mkdir -p "$AGENT_DIR"
-
 rc=0
+
+# `check` is read-only; only a link needs the directory to exist.
+if [ "$MODE" = install ]; then
+	mkdir -p "$AGENT_DIR"
+fi
 
 link_state() {
 	# Prints: ok | missing | stale | foreign
@@ -108,6 +151,12 @@ done
 user_skill="${PI_AGENT_DIR:-$HOME/.pi/agent}/skills/code-review-swarm/SKILL.md"
 if [ -f "$user_skill" ] && [ "$(readlink -f "$user_skill")" != "$(readlink -f "$ROOT/skills/code-review-swarm/SKILL.md")" ]; then
 	printf 'WARN  %s is a separate copy; install this repo as a package and remove it to avoid two skills\n' "$user_skill"
+fi
+
+# `check` is the pre-flight: links AND the two model ids, because a lane with an id this
+# install cannot resolve is the failure a stranger hits first.
+if [ "$MODE" = check ]; then
+	check_models
 fi
 
 exit $rc

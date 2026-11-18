@@ -46,7 +46,7 @@ reported" is the one thing a gate must not blur.
 ```sh
 swarm-gate                                  # review the working tree against HEAD
 swarm-gate --repo /path/to/repo             # review a repository other than the cwd
-swarm-gate --scope src/shinro/codegen       # restrict the lanes to a subtree
+swarm-gate --scope src/pkg/module           # restrict the lanes to a subtree
 swarm-gate --lanes correctness              # one lane (cheaper)
 swarm-gate --max-rounds 3 --same-signature-limit 2
 swarm-gate --json                           # machine-readable verdict for the ledger/CI
@@ -59,13 +59,25 @@ swarm-gate --history                        # read this change set back: rounds 
 swarm-gate --note "deferred: the :108 row"  # record a decision beside the rounds
 ```
 
-Installed on PATH at `~/.local/bin/swarm-gate` (a symlink; the shim resolves its own
-symlink, so the checkout stays the single source of truth).
+Install by symlinking `bin/swarm-gate` onto your `PATH` (from this directory, so `$PWD` is
+`review-gate/`):
+
+```sh
+ln -s "$PWD/bin/swarm-gate" ~/.local/bin/swarm-gate
+```
+
+The shim resolves its own symlink, so the checkout stays the single source of truth.
 
 ## What it does and does not reuse
 
 Reused, unchanged: the two lane agents (`code-review-swarm/agents/`), their models, their
 output contract, and `lane-prepare.sh` for isolated per-lane checkouts.
+
+The two models are pinned in those agent files, and the ids shipped with them are examples
+from one setup — set both to ids your install has before the first run
+([`code-review-swarm`](../code-review-swarm/README.md#set-the-two-models-first)). The gate
+will not choose a model for a lane: an unpinned lane is a usage error, and an id your
+provider does not serve fails the dispatch, which is exit `5`, not a clean review.
 
 **Not reused: the skill's merge step.** The merge is model judgment — dedupe on "same
 broken invariant ±3 lines", contradiction handling, quality severities mapped onto the
@@ -123,7 +135,7 @@ change set 86b10a2aea  (3 round(s), 1 note(s))
       When anything is staged, prepare chooses worktree mode ...
       trigger: git add ctl.py then edit another tracked file ...
   round 2  exit 1  ...
-  note 2026-11-12T23:23:00-0500: the :108 row is the FaultLatch contract; own change set
+  note 2026-11-12T23:23:00+0000: the :108 row is the latch contract; own change set
 ```
 
 The ledger keeps each round's **finding text and trigger**, not just its location, because

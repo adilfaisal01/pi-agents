@@ -1,0 +1,84 @@
+{
+  "name": "@adilfaisal01/pi-agents",
+  "version": "0.1.1",
+  "description": "Per-mode capability profiles, a two-model code review with its gate, and isolated subagent dispatch for the Pi coding agent \u2014 as one install.",
+  "license": "MIT",
+  "author": "Adil Faisal",
+  "type": "module",
+  "homepage": "https://github.com/adilfaisal01/pi-agents#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adilfaisal01/pi-agents.git"
+  },
+  "bugs": {
+    "url": "https://github.com/adilfaisal01/pi-agents/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "agent-modes",
+    "permissions",
+    "code-review",
+    "subagent",
+    "review"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "bin": {
+    "swarm-gate": "review-gate/bin/swarm-gate",
+    "review-lanes": "review-lanes/bin/review-lanes"
+  },
+  "pi": {
+    "extensions": [
+      "./v-model-agents/modes/index.ts",
+      "./pi-subagent/index.ts"
+    ],
+    "skills": [
+      "./v-model-agents/skills",
+      "./code-review-swarm/skills"
+    ],
+    "prompts": [
+      "./code-review-swarm/prompts"
+    ],
+    "agents": [
+      "./code-review-swarm/agents"
+    ],
+    "changelogPath": "./CHANGELOG.md"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "files": [
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "NOTICES.md",
+    "v-model-agents/modes/index.ts",
+    "v-model-agents/modes/config.json",
+    "v-model-agents/modes/prompts",
+    "v-model-agents/skills",
+    "code-review-swarm/agents",
+    "code-review-swarm/skills",
+    "code-review-swarm/prompts",
+    "code-review-swarm/scripts",
+    "code-review-swarm/README.md",
+    "pi-subagent/index.ts",
+    "pi-subagent/agents.ts",
+    "pi-subagent/README.md",
+    "review-gate",
+    "review-lanes",
+    "!**/__pycache__",
+    "!**/*.pyc",
+    "!**/.pytest_cache",
+    "!**/.DS_Store"
+  ],
+  "scripts": {
+    "check": "bash scripts/check-package.sh",
+    "prepublishOnly": "bash scripts/check-package.sh"
+  }
+}

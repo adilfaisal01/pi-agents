@@ -322,7 +322,8 @@ def parse_lane(lane: str, text: str) -> dict:
             if all(set(c) <= set("-: ") for c in cells if c):
                 continue  # |----|-----|
             ident, sev_cell = norm(cells[0]), norm(cells[1]).upper()
-            if not ID_RE.match(ident) or not SEV_RE.match(sev_cell):
+            sev_match = SEV_RE.match(sev_cell)
+            if not ID_RE.match(ident) or not sev_match:
                 unreadable.append(low[:80])
                 continue
             location = norm(cells[2]) if len(cells) > 2 else ""
@@ -333,7 +334,7 @@ def parse_lane(lane: str, text: str) -> dict:
             rows.append(
                 {
                     "id": ident,
-                    "sev": SEV_RE.match(sev_cell).group(1),
+                    "sev": sev_match.group(1),
                     "sev_label": sev_cell,
                     "location": location,
                     "path": (match.group("path").strip() if match else ""),
@@ -489,7 +490,7 @@ def ensure_ignored(repo: str, work: Path) -> str:
 def append_note(work: Path, change_set: str, text: str, repo: str = "") -> Path:
     """A human decision, recorded in the same stream as the rounds.
 
-    The gate can say what blocked; only a person can say "the :108 row is the FaultLatch
+    The gate can say what blocked; only a person can say "the :108 row is the latch
     contract, defer it to its own change set". Recording that next to the round that raised
     it is the whole point of keeping this folder.
     """
@@ -957,7 +958,7 @@ def main(argv: list[str]) -> int:
     # stable HEAD, and committing moves HEAD, so the committed diff is a new change set with
     # a fresh budget. Keying on the base alone made the refusal's own advice false: the base
     # does not move when you commit, so a change set that spent its budget could never be
-    # re-reviewed at all. (Found by external use on tmr-supervisor, after a commit.)
+    # re-reviewed at all. (Found by external use, after a commit in the reviewed repo.)
     # A default run (base == HEAD) keeps the bare base sha, byte-identical to every ledger
     # written before this change, so an in-flight loop keeps its round count. A --base run
     # composes the pair, which is what makes a commit start a new change set.

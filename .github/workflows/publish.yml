@@ -1,0 +1,120 @@
+name: publish
+
+# Publish @adilfaisal01/pi-agents to npm from CI.
+#
+# Auth, in order of preference:
+#   1. NPM_TOKEN secret — a granular token with "Bypass 2FA" ticked. Works
+#      today; such a token cannot create other tokens or change settings (npm
+#      requires an interactive WebAuthn challenge for those), and bypass
+#      tokens lose direct publish around Jan 2027.
+#   2. otherwise: OIDC trusted publishing — npm exchanges the workflow's GitHub
+#      identity for a short-lived token, and records provenance (public repo +
+#      public package ⇒ attestations are automatic).
+# Set the secret to switch; leave it unset to stay on OIDC.
+#
+# One-time setup — npmjs.com → the package → Settings → Trusted publisher:
+#   provider  GitHub Actions
+#   user      adilfaisal01
+#   repo      pi-agents
+#   workflow  publish.yml   (filename only, and it must exist here)
+#   actions   "Allow npm publish"
+#             tick it — a config created after Sep 2026 is stage-only by default
+# The config expires if it does not complete a publish within 2 days, so have
+# the first tag push ready when you create it.
+#
+# Usage: bump the version, commit, then tag and push. The tag must match
+# package.json. A version already on the registry is skipped, so re-running
+# a tag that published is a no-op rather than a failure:
+#   npm version patch && git push && git push --tags
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # the OIDC token npm exchanges for a publish token
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # trusted publishing needs a GitHub-hosted runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # Actions are pinned to commit SHAs: a tag can be repointed at other code.
+      # The trailing comment names the release — bump both together (both v6).
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          # OIDC needs node ≥ 22.14 and npm ≥ 11.5.1
+          node-version: "24"
+          package-manager-cache: false
+          # no registry-url: it writes an _authToken placeholder that would
+          # shadow both auth paths below, and npm uses the public registry
+
+      - name: Version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} != package.json ${pkg}"
+            exit 1
+          fi
+          echo "tag ${GITHUB_REF_NAME} -> version ${pkg}"
+
+      - name: Already on the registry?
+        id: registry
+        run: |
+          pkg="@adilfaisal01/pi-agents"
+          version="$(node -p "require('./package.json').version")"
+          if npm view "${pkg}@${version}" version >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::${pkg}@${version} is already published"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The package has no dependencies: its peers are pi's own packages, and
+      # the selftests import them. npm installs the peers, no lockfile.
+      - name: Peer types for the selftests
+        if: steps.registry.outputs.published == 'false'
+        run: npm install --no-save --no-package-lock typescript
+
+      # `npm publish` runs prepublishOnly → scripts/check-package.sh: the
+      # manifest/packed-tarball check and all five suites. Nothing there needs
+      # a provider: PI_MODEL_CHECK=skip says this runner has no model
+      # registry, so the lane model pins are skipped rather than failed.
+      - name: Publish
+        if: steps.registry.outputs.published == 'false'
+        env:
+          PI_MODEL_CHECK: skip
+          PI_RELEASE_ROOT: ${{ github.workspace }}/node_modules
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "${NPM_TOKEN}" ]; then
+            printf '//registry.npmjs.org/:_authToken=%s\n' \
+              "${NPM_TOKEN}" > "$HOME/.npmrc"
+            chmod 600 "$HOME/.npmrc"
+            echo "auth: NPM_TOKEN secret (granular token, bypass 2FA)"
+          else
+            echo "auth: OIDC trusted publishing (no secret)"
+          fi
+          npm publish --access public
+
+      - name: What landed
+        if: steps.registry.outputs.published == 'false'
+        run: |
+          pkg="@adilfaisal01/pi-agents"
+          version="$(node -p "require('./package.json').version")"
+          npm view "${pkg}@${version}" version dist.shasum dist.integrity

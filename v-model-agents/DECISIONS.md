@@ -90,7 +90,7 @@ the documents yet — read it as a known gap, not as a plan.
     the **parent** session from editing source — the skill is advice, and the refusals
     live where the process is owned. A user who wants the wall starts `pi --tools
     read,grep,find,ls,bash`. The 62 extension assertions go with the code they tested;
-    `check.sh` now runs the 73 gate assertions plus the skill's frontmatter and the paths
+    `check.sh` now runs the 109 gate assertions plus the skill's frontmatter and the paths
     its procedure names. (`docs/01`, `README`)
 
 ## Open

@@ -26,8 +26,8 @@ table from double-counting one defect as two findings.
 
 ## How the orchestration actually happens
 
-The `subagent` tool ([`pi-subagent`](https://github.com/adilfaisal01/pi-subagent), a
-standalone package forked from pi's example extension) spawns children:
+The `subagent` tool ([`pi-subagent`](../pi-subagent), a standalone package forked from
+pi's example extension) spawns children:
 
 ```
 pi --mode json -p --no-session -ne --model <provider>/<id> --tools read,grep,find,ls,bash
@@ -44,7 +44,8 @@ returns both transcripts.
 ### Model selection
 
 The `subagent` tool has **no per-call model parameter**. The model is a frontmatter field on
-the agent that becomes `--model`:
+the agent that becomes `--model`. The two shipped ids are examples — replace both with ids
+you have (`pi --list-models`); `scripts/install.sh check` fails until they resolve.
 
 | Want | Do |
 |---|---|
@@ -70,7 +71,7 @@ was installed from.
   dangling commit holding exactly the index. HEAD, the index, the branch and the stash list
   are untouched. Otherwise the commit is `HEAD`.
 - Each lane gets a same-depth worktree at that commit, via
-  [`review-lanes`](https://github.com/adilfaisal01/review-lanes), which refuses unless
+  [`review-lanes`](../review-lanes), which refuses unless
   `import <pkg>` resolves *inside* the worktree. Same sha, two trees.
 - A lane may write only under `review/` (`write_scope` in its frontmatter, enforced by the
   dispatcher's post-check after the run). With separate trees that check is unambiguous —
@@ -85,12 +86,28 @@ Report it as the weaker review it is.
 ./scripts/lane-prepare.sh clean     # the next prepare refuses a dirty worktree, by design
 ```
 
+## Set the two models first
+
+The lanes pin `model:` as a `provider/id`, and the ids shipped in this repository are
+examples from one setup: a package cannot know which providers you have. Set both before
+the first dispatch, or the lanes fail with the provider's `404 model … not found` (and
+`review-gate` reports exit 5, "a lane is unusable", rather than picking a model for you):
+
+```sh
+pi --list-models | head -20                                  # ids available to you
+$EDITOR agents/review-correctness.md agents/review-quality.md # the model: line in each
+scripts/install.sh check                                     # FAILs while either id is unresolvable
+```
+
+Two **different** ids is the premise, not a preference. Setting `model:` is also the only
+way to choose a model, because the `subagent` tool has no per-call model parameter.
+
 ## Install
 
 ```sh
 git clone <this repo> && cd code-review-swarm
 scripts/install.sh          # symlinks the two lanes into ~/.pi/agent/agents
-scripts/install.sh check    # verifies the links
+scripts/install.sh check    # verifies the links and that both model ids resolve here
 scripts/selftest.sh         # static checks: frontmatter, model ids, write_scope, contracts
 scripts/selftest.sh --live  # + a real two-lane dispatch at tests/fixture/
 scripts/lane-prepare.sh prepare   # scope -> sha -> one worktree per lane (needs review-lanes)

@@ -37,10 +37,10 @@ pre-implementation commit is rejected, not merged.
 
 **Symptom.** Two lanes pass alone; the composed build differs run to run.
 **Why it passes.** Each lane's log looks clean.
-**Countermeasure.** Generated paths rewritten in place (`graph_data.zig`,
-`codegen/emosqp/`, `.zig-cache/`, `build/`) are lane-exclusive: one worktree per lane, or
-serialize. "Overwritten by whichever generator ran last" is a race, spelled out in a
-comment.
+**Countermeasure.** Generated paths rewritten in place (a checked-in generated source, a
+codegen output directory, `.zig-cache/`, `build/`) are lane-exclusive: one worktree per
+lane, or serialize. "Overwritten by whichever generator ran last" is a race, spelled out
+in a comment.
 
 ## 6. A suite that was never run whole
 

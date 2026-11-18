@@ -11,8 +11,9 @@ dates. No source file was modified by the merge.
 | `pi-subagent/` | `git@github.com:adilfaisal01/pi-subagent.git` | `0be758400ef0c4513fc70b964c0336ebed84f132` |
 | `review-lanes/` | `git@github.com:adilfaisal01/review-lanes.git` | `a18432603c6b2df644b7ffbed50fa98a43b9ab41` |
 
-The original repositories remain in place untouched; this repository is the workspace
-going forward.
+`review-gate/` was written in this workspace rather than imported, so its history is the
+workspace's own. The original repositories remain in place untouched; this repository is
+the workspace going forward.
 
 ## Third-party notes
 

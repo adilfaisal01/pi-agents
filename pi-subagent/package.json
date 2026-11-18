@@ -1,6 +1,6 @@
 {
 	"name": "pi-subagent",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "The subagent tool for pi: dispatch named agents in separate processes, with a package-relative agent root and an enforced write scope.",
 	"type": "module",
 	"license": "MIT",

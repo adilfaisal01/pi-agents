@@ -813,8 +813,8 @@ fi
 
 # A commit must start a new change set. Keying on the base alone made the refusal's own
 # advice ("committing ends the change set") false: the base does not move when you commit,
-# so a change set that spent its budget could never be re-reviewed. (Found by external use
-# on tmr-supervisor, after committing an amendment.)
+# so a change set that spent its budget could never be re-reviewed. (Found by external
+# use, after committing an amendment in the reviewed repository.)
 REPO13="$WORK/repo13"
 mkdir -p "$REPO13"
 git -C "$REPO13" init -q -b main

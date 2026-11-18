@@ -40,7 +40,9 @@ echo "review-lanes selftest"
 
 # --- independence ------------------------------------------------------------------
 # Borrowed vocabulary, nothing load-bearing: the tool may call a commit a pin and a
-# checkout a lane, but it must not name, import, or shell out to another project.
+# checkout a lane, but it must not name, import, or shell out to another project. The
+# tokens below are a deny-list — their job is to be absent from the subject — so naming
+# them here is the guard, not a reference.
 foreign="$(grep -nE 'v-model|gate/|wave\.sh|sysdv|ledger\.md|shinro-' "$SUBJECT" || true)"
 if [ -z "$foreign" ]; then
 	check "names no other project" 0 0

@@ -44,8 +44,28 @@ console.log("subagent selftest");
 delete process.env.PI_SUBAGENT_PACKAGE_AGENTS;
 ok(
 	"the package's own agents dir is resolved, not ~/.pi/agent",
-	agentsMod.packageAgentsDir() === DEFAULT_AGENTS_ROOT,
-	agentsMod.packageAgentsDir(),
+	agentsMod.packageAgentsDirs().includes(DEFAULT_AGENTS_ROOT),
+	JSON.stringify(agentsMod.packageAgentsDirs()),
+);
+
+// LOCAL 5: a bundle declares its agents directories in the manifest it shares with the
+// extension, so publishing one npm package does not mean copying the agent files.
+const bundleRoot = mkdtempSync(path.join(tmpdir(), "subagent-bundle-"));
+mkdirSync(path.join(bundleRoot, "swarm", "agents"), { recursive: true });
+writeFileSync(
+	path.join(bundleRoot, "package.json"),
+	JSON.stringify({ name: "fixture-bundle", pi: { agents: ["./swarm/agents"] } }),
+);
+const declared = agentsMod.declaredAgentDirs(bundleRoot);
+ok(
+	"pi.agents is read from the manifest, package-relative",
+	declared.length === 1 && declared[0] === "./swarm/agents",
+	JSON.stringify(declared),
+);
+ok(
+	"a manifest without pi.agents declares nothing",
+	agentsMod.declaredAgentDirs(path.join(bundleRoot, "swarm")).length === 0,
+	JSON.stringify(agentsMod.declaredAgentDirs(path.join(bundleRoot, "swarm"))),
 );
 
 // A fixture agent stands in for whatever a consumer ships. The test must not depend on

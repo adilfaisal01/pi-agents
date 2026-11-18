@@ -11,6 +11,10 @@
  *            outside a package.
  *   LOCAL 2  `write_scope` frontmatter, carried onto AgentConfig so the tool can
  *            verify after the fact what a child actually wrote.
+ *   LOCAL 5  more than one package agents root: `pi.agents` in the package manifest,
+ *            and the manifest one directory up. That is how a bundle (one npm package
+ *            holding several extensions) ships an extension and its agents without
+ *            copying the files into `agents/`.
  *
  * Keep upstream diffs small: adapt, do not rewrite.
  */
@@ -147,28 +151,72 @@ function findNearestProjectAgentsDir(cwd: string): string | null {
 }
 
 /**
- * LOCAL 1: the agents shipped inside this package. Resolved from this module's own
- * location (`<package>/agents.ts` -> `<package>/agents`) so it works wherever pi
- * installed the package — npm cache, git checkout, release dir. A consumer that
- * keeps its agents elsewhere points `PI_SUBAGENT_PACKAGE_AGENTS` at them; the
- * selftest does exactly that.
+ * LOCAL 5: the `pi.agents` entries of the package manifest at `root`, resolved against
+ * it. Paths are package-relative, like every other `pi` manifest field. An unknown key
+ * is ignored by pi itself, which reads only extensions/skills/prompts/themes from the
+ * manifest; this key belongs to the tool that consumes it.
+ */
+export function declaredAgentDirs(root: string): string[] {
+	try {
+		const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf-8")) as {
+			pi?: { agents?: unknown };
+		};
+		const entries = pkg?.pi?.agents;
+		if (!Array.isArray(entries)) return [];
+		return entries.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * LOCAL 1 + LOCAL 5: every directory this package ships agents in, in load order.
+ *
+ *  - `PI_SUBAGENT_PACKAGE_AGENTS` overrides the lot (the selftest uses it).
+ *  - otherwise the module's own `agents/` directory, plus whatever the manifest at
+ *    `<this dir>/package.json` and `<parent>/package.json` declares under `pi.agents`.
+ *    The parent is read because a bundle installs this extension one directory down
+ *    (`<bundle>/pi-subagent/agents.ts`) while the manifest lives at `<bundle>/`.
+ *
+ * Resolved from the module's own location, so it works wherever pi installed the
+ * package — npm cache, git checkout, release dir.
+ */
+export function packageAgentsDirs(): string[] {
+	const fromEnv = process.env.PI_SUBAGENT_PACKAGE_AGENTS;
+	if (fromEnv) return [fromEnv];
+
+	let own: string;
+	try {
+		own = path.dirname(fileURLToPath(import.meta.url));
+	} catch {
+		return [path.join(process.cwd(), "agents")];
+	}
+
+	const dirs: string[] = [];
+	const add = (dir: string) => {
+		if (!dirs.includes(dir)) dirs.push(dir);
+	};
+	const ownAgents = path.resolve(own, "agents");
+	add(ownAgents);
+	for (const root of [own, path.resolve(own, "..")]) {
+		for (const rel of declaredAgentDirs(root)) add(path.resolve(root, rel));
+	}
+	return dirs;
+}
+
+/**
+ * The first package agents directory. Kept because a consumer may resolve one dir; the
+ * discovery path below uses every entry.
  */
 export function packageAgentsDir(): string {
-	const fromEnv = process.env.PI_SUBAGENT_PACKAGE_AGENTS;
-	if (fromEnv) return fromEnv;
-	try {
-		const own = path.dirname(fileURLToPath(import.meta.url));
-		return path.resolve(own, "agents");
-	} catch {
-		return path.join(process.cwd(), "agents");
-	}
+	return packageAgentsDirs()[0];
 }
 
 export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
 	const userDir = path.join(getAgentDir(), "agents");
 	const projectAgentsDir = findNearestProjectAgentsDir(cwd);
 
-	const packageAgents = loadAgentsFromDir(packageAgentsDir(), "package");
+	const packageAgents = packageAgentsDirs().flatMap((dir) => loadAgentsFromDir(dir, "package"));
 	const userAgents = scope === "project" ? [] : loadAgentsFromDir(userDir, "user");
 	const projectAgents = scope === "user" || !projectAgentsDir ? [] : loadAgentsFromDir(projectAgentsDir, "project");
 

@@ -7,7 +7,7 @@ One row per claim. A row is the unit of work, of parallelism, and of verificatio
 ```markdown
 | id | level | requirement | design | interface | sources | tests | evidence | verdict |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| R1 | L1 | CTE mean ≤ 0.05 m, max ≤ 0.10 m over 48 s at stride 12 | anchored frame: p' = R(−θ)(p − anchor) | none | src/shinro/controllers/ | test_tracking_cte_bounds | run_tracking --anchor (48 s) | proved |
+| R1 | L1 | CTE mean ≤ 0.05 m, max ≤ 0.10 m over 48 s at stride 12 | anchored frame: p' = R(−θ)(p − anchor) | none | src/controllers/ | test_tracking_cte_bounds | run_tracking --anchor (48 s) | proved |
 ```
 
 | column | rule |
@@ -107,8 +107,8 @@ more than one that only lists successes:
 
 ```markdown
 ## Not established
-- Torque re-enable after recovery is the child's behaviour, not Cake's: the admin
-  protocol carries no torque concept. (R7, structural)
+- Torque re-enable after recovery is the child's behaviour, not the supervisor's: the
+  admin protocol carries no torque concept. (R7, structural)
 - The 48 s envelope was measured on the dev host only; the board has a different
   scheduler. (R1, conditional on host)
 ```

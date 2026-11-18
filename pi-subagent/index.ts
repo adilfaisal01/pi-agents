@@ -17,9 +17,15 @@
  *            declared `write_scope` moved.
  *   LOCAL 4  the child does not inherit the parent's extensions (`-ne`), so a mode
  *            guard loaded here cannot strip the tools the agent declares.
+ *   LOCAL 5  more than one package agents root: `pi.agents` in the manifest, plus the
+ *            manifest one directory up, so a bundle can ship agents without copying.
  *
  * Upstream behaviour (modes, streaming, rendering) is untouched: adapt, do not
  * rewrite, so a future upstream diff stays readable. See UPSTREAM-README.md.
+ *
+ * Type-checking this file needs `./prepare-types.sh` first: it links pi's release types
+ * into `node_modules/`, which the repo does not commit. Pi itself loads the `.ts` without
+ * them, so only an editor or `tsc` complains on a fresh clone.
  *
  * Spawns a separate `pi` process for each subagent invocation,
  * giving it an isolated context window.

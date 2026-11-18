@@ -55,8 +55,9 @@ That is a refusal, not a review note: the lane is discarded whole.
 2. **Green here is not done.** Done is the composed gate, run once for all lanes after
    they merge (`docs/02`). Your lane green only says this row is satisfied in isolation.
 3. **Shared generated paths serialize.** If your change rewrites a generated file in
-   place (`graph_data.zig`, `codegen/`, `.zig-cache/`, `build/`), say so in your report;
-   the partition rules decide whether the lane may run in parallel at all.
+   place (a checked-in generated source, a codegen output directory, a build cache), say
+   so in your report; the partition rules decide whether the lane may run in parallel at
+   all.
 4. **Stop instead of contorting.** If a frozen test is wrong — it asserts the opposite of
    the requirement, it names a function the design does not call for, it has a tolerance
    the requirement never stated — **stop** and report the row, the assertion, and what
@@ -75,7 +76,7 @@ Return a table, not prose:
 | red before | gate/run-tests.sh -k tracking | 1 failed (ImportError: module absent) |
 | green after | gate/run-tests.sh -k tracking | 4 passed |
 | lock clean | gate/lock-check.sh <pin> | exit 0, frozen surface unchanged |
-| scope | git status --porcelain | src/shinro/controllers/ only |
+| scope | git status --porcelain | src/controllers/ only |
 ```
 
 Then: the files you changed and why, anything the requirement left ambiguous, and — if
