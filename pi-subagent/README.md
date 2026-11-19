@@ -16,6 +16,7 @@ readable.
 | 3 | a **write-scope post-check**: after a child exits cleanly its worktree is inspected, and the run fails if anything outside the agent's declared `write_scope` moved |
 | 4 | the child does not inherit the parent's extensions (`-ne`), so a mode guard loaded here cannot strip the tools the agent declares |
 | 5 | `pi.agents` in the package manifest, plus the manifest one directory up — so a **bundle** (one npm package holding several extensions) can ship agents without copying them into `agents/` |
+| 6 | a **role→model map** (`subagent-models.json`, user + project layers) applied after discovery, so a role can run on its own model without editing the agent file |
 
 ## Why the package agents root
 
@@ -69,6 +70,46 @@ egg-info, …) are filtered: a run that executes the suite legitimately produces
 With no `write_scope` declared the check is inert, by design — an agent that declares
 nothing is not silently held to something.
 
+## `subagent-models.json` — a model per role
+
+A package ships agent files it also wants to keep portable, and `pi update` replaces
+whatever it installed. So a model pin in an agent file is the wrong place for a role→model
+mapping you own. Put it in a map instead:
+
+```json
+{
+  "architect": "ollama-cloud/deepseek-v4.1-flash",
+  "builder": "ollama-cloud/qwen3.5:27b",
+  "spec-reviewer": "ollama-cloud/mistral-large-4",
+  "disposition": "ollama-cloud/mimo-v2.6-flash"
+}
+```
+
+Two layers, lowest first:
+
+| layer | file | scope |
+| --- | --- | --- |
+| user | `~/.pi/agent/subagent-models.json` | you, every project (`PI_SUBAGENT_MODEL_MAP` replaces the path — the selftest uses it) |
+| project | the nearest `<dir>/.pi/subagent-models.json`, walking up from the child's cwd | this checkout; committable |
+
+Precedence for one agent: **project map → user map → the agent's own `model:` frontmatter →
+the dispatching session's model** (and, in the last case only, its thinking level too — an
+explicit model drops the inherited level, map-supplied or not). An agent whose name appears
+in no map and carries no `model:` line simply inherits, which is the shipped default.
+A name in a map that matches no discovered agent is ignored, and a malformed or partly
+non-string map contributes no pins — discovery runs on every dispatch, so it fails open
+rather than taking the tool down.
+
+The map is applied in `discoverAgents`, not at spawn time, so anything reading discovery
+(the tool, a check script, a test) sees the model that will actually be used; each agent
+carries `modelSource` (`frontmatter` | `user-map` | `project-map`) so a caller can report
+where a pin came from.
+
+One limit worth knowing: a map-supplied id that does not resolve fails in the **child**, so
+the error arrives as pi's own `Model "…" not found` before the task text is read — it names
+the id but not the layer that pinned it. The run's `model` and `modelSource` are what tell
+you which map (or which agent file) produced it.
+
 ## Use
 
 ```sh
@@ -99,9 +140,10 @@ per-run usage.
 ```
 
 `selftest.mjs` covers only what this package changed relative to upstream: the package
-agents root (with a fixture agent, so it depends on no other project), the `write_scope`
-frontmatter, porcelain parsing, and the scope check end to end in a throwaway git tree.
-Upstream spawning, streaming and rendering are pi's own to test.
+agents root (with a fixture agent, so it depends on no other project), the role→model map
+and its precedence against frontmatter, the `write_scope` frontmatter, porcelain parsing,
+and the scope check end to end in a throwaway git tree. Upstream spawning, streaming and
+rendering are pi's own to test.
 
 `prepare-types.sh` links the installed pi release's `node_modules` into this checkout so
 `tsc` and `node selftest.mjs` can resolve `@earendil-works/*`. Nothing at runtime needs it:

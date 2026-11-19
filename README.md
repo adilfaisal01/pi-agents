@@ -152,6 +152,28 @@ models — with `forge-review` turning the merged SEV1–SEV4 table into the sen
 JSON block the harness extracts for `.harness/review/<pr>.json` and the `disposition`
 adjudicator. Both lanes feed it; quality findings are normalised, not filtered out.
 
+**The roles run on different models.** A dispatched role's model comes from
+`subagent-models.json` (user + project layers, keyed by agent name) so the agent files stay
+portable; the architect *as the session* takes the `forge` mode's `model` from an override file;
+and a PR review takes its model from the forge's own `harness/reviewers.config` when the harness
+owns it, or from the swarm lanes when it does not. [forge/README.md](forge/README.md#role--model)
+has the table and a worked map.
+
+These are the **pi render** of the forge's skills and roles, and pi's rendering is a real
+difference, not a formatting one: `ask_user_question` is named literally, and every claim
+that a hook enforces something is replaced by what actually enforces it here. The forge's
+`.claude/hooks/**` gates do **not** fire under pi — neither do its `Stop` and `PostToolUse`
+hooks. What does hold is host-side (the harness floors: `intake.sh spec-review`'s captured
+verdict, the TTY-gated `ratify`, Gate B `analyze`; the git hooks; the human merge) plus two
+pi-shaped facts: a dispatched role gets exactly the tools and `write_scope` in its contract,
+and a headless pi run has no ask tool at all. The pi tiers that would close the rest — an
+`architect`/`builder` agent mode and gondolin's mounts — are planned, not shipped
+([the port plan](docs/forge-architect-port-plan.md)).
+
+The skills read `harness/intake-categories.json` and `templates/spec-template.md` from the
+repo they are used in; they ship the protocol, not the harness. Provenance and the relation
+to the forge's own copies: [forge/README.md](forge/README.md).
+
 ## Verifying a checkout
 
 Everything below runs without dispatching a model:

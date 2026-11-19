@@ -78,6 +78,27 @@ The skills **use** the forge harness; they do not contain it. They read
 (`intake.sh spec-review`, `ratify`, `analyze`) run on the host. A pi session outside a forge
 checkout can hold the protocol but has nothing to run the gates against.
 
+## Role → model
+
+The forge's roles are meant to run on different models, and in this port they already do —
+but through three different mechanisms, because they are three different kinds of process:
+
+| role | what it runs as | where its model is set |
+| --- | --- | --- |
+| `architect` (as the session) | the interactive pi session | the `forge` mode's `model` in an override file: `{"modes":{"forge":{"model":"<provider>/<id>"}}}` — "this session is the architect". The shipped mode carries none, because a package cannot know your providers |
+| `architect`, `builder`, `spec-reviewer`, `disposition` (dispatched) | `subagent` child processes | `subagent-models.json` (user `~/.pi/agent/`, project `<repo>/.pi/`), keyed by agent name — see [pi-subagent's README](../pi-subagent/README.md#subagent-modelsjson--a-model-per-role). The agent files stay model-free so the package stays portable |
+| `reviewer` (PR review) | `harness/review-task.sh` on the host | `harness/reviewers.config` in the forge repo: `REVIEWER_BACKEND` + `<prefix>_MODEL`, with `SPEC_REVIEW_BACKEND` and `DISPOSITION_BACKEND` splittable. The file argues for a *different family* on the adjudicator |
+| the two review lenses (pi path, when the harness does not own review) | `code-review-swarm` lanes | each lane's `model:` frontmatter — two different ids on purpose |
+
+Two consequences worth knowing. An agent whose name is in the map gets `--model`, and an
+explicit model **drops the inherited thinking level** — so a pinned role thinks at its
+provider's default, not at the dispatcher's level. And the map beats frontmatter by design:
+precedence is **project map → user map → frontmatter → dispatcher**, so you can pin a role
+for one checkout without touching an installed agent file.
+
+Why not in the mode? A mode's `model` is session-scoped — one model per session. Roles are
+dispatch-scoped. Only the role that *is* the session (the architect) belongs there.
+
 ## Precedence inside a forge checkout
 
 Skills are resolved by name with the *first* tier winning, and a project tree beats a package tree.

@@ -99,6 +99,75 @@ ok("it is labelled as coming from the package", fixture?.source === "package", S
 ok("it declares its write scope", Boolean(fixture?.writeScope?.includes("tests")), JSON.stringify(fixture?.writeScope));
 ok("it carries its system prompt", (fixture?.systemPrompt ?? "").length > 100);
 
+// --- LOCAL 6: the role→model map -------------------------------------------
+// Pinned to a path we control before any discovery runs: a machine that happens to have a
+// ~/.pi/agent/subagent-models.json must not change this suite's verdict.
+const mapDir = mkdtempSync(path.join(tmpdir(), "subagent-models-"));
+const userMapFile = path.join(mapDir, "user-map.json");
+process.env.PI_SUBAGENT_MODEL_MAP = userMapFile;
+const writeMap = (file, obj) => writeFileSync(file, JSON.stringify(obj));
+const modelOf = (cwd, name) => agentsMod.discoverAgents(cwd, "user").agents.find((a) => a.name === name);
+
+// A second fixture whose frontmatter pins a model, so precedence can be observed.
+writeFileSync(
+	path.join(pkgAgents, "fixture-pinned.md"),
+	"---\nname: fixture-pinned\ndescription: pinned in frontmatter\nmodel: vendor/frontmatter-model\n---\n\npinned agent\n",
+);
+
+ok(
+	"an unmapped agent with no frontmatter model inherits the dispatcher",
+	modelOf(emptyCwd, "fixture")?.model === undefined,
+	String(modelOf(emptyCwd, "fixture")?.model),
+);
+ok(
+	"frontmatter is reported as the model's source",
+	modelOf(emptyCwd, "fixture-pinned")?.modelSource === "frontmatter",
+	String(modelOf(emptyCwd, "fixture-pinned")?.modelSource),
+);
+
+writeMap(userMapFile, { fixture: "vendor/user-map-model" });
+let pinned = modelOf(emptyCwd, "fixture");
+ok("the user map pins a model for a role", pinned?.model === "vendor/user-map-model", String(pinned?.model));
+ok("the pin is attributed to the user layer", pinned?.modelSource === "user-map", String(pinned?.modelSource));
+writeMap(userMapFile, { "fixture-pinned": "vendor/user-beats-frontmatter" });
+pinned = modelOf(emptyCwd, "fixture-pinned");
+ok(
+	"a map entry beats the agent's own frontmatter",
+	pinned?.model === "vendor/user-beats-frontmatter" && pinned?.modelSource === "user-map",
+	`${pinned?.model} (${pinned?.modelSource})`,
+);
+
+// Project layer: `<nearest .pi>/subagent-models.json`, found by walking up from cwd.
+const projectRoot = mkdtempSync(path.join(tmpdir(), "subagent-proj-"));
+const projectCwd = path.join(projectRoot, "nested", "deeper");
+mkdirSync(path.join(projectRoot, ".pi"), { recursive: true });
+mkdirSync(projectCwd, { recursive: true });
+writeMap(path.join(projectRoot, ".pi", "subagent-models.json"), { fixture: "vendor/project-map-model" });
+ok(
+	"the project map is found from a nested cwd",
+	agentsMod.findNearestModelMap(projectCwd) === path.join(projectRoot, ".pi", "subagent-models.json"),
+	String(agentsMod.findNearestModelMap(projectCwd)),
+);
+pinned = modelOf(projectCwd, "fixture");
+ok("the project map beats the user map", pinned?.model === "vendor/project-map-model", String(pinned?.model));
+ok("the pin is attributed to the project layer", pinned?.modelSource === "project-map", String(pinned?.modelSource));
+ok(
+	"an unknown name in a map is ignored",
+	modelOf(projectCwd, "fixture-pinned")?.model === "vendor/user-beats-frontmatter",
+	String(modelOf(projectCwd, "fixture-pinned")?.model),
+);
+
+// A broken map is a missing map, never a crash: discovery runs on every dispatch.
+writeFileSync(userMapFile, "{ not json");
+ok("a malformed user map pins nothing", modelOf(emptyCwd, "fixture")?.model === undefined);
+writeFileSync(userMapFile, JSON.stringify({ fixture: 42, "": "vendor/x" }));
+ok("a non-string or empty pin is dropped", modelOf(emptyCwd, "fixture")?.model === undefined);
+
+writeMap(userMapFile, {});
+rmSync(mapDir, { recursive: true, force: true });
+rmSync(projectRoot, { recursive: true, force: true });
+delete process.env.PI_SUBAGENT_MODEL_MAP;
+
 // A user's own agent of the same name must win over the shipped one.
 const fakeHome = mkdtempSync(path.join(tmpdir(), "subagent-home-"));
 mkdirSync(path.join(fakeHome, "agents"), { recursive: true });

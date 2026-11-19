@@ -15,6 +15,10 @@
  *            and the manifest one directory up. That is how a bundle (one npm package
  *            holding several extensions) ships an extension and its agents without
  *            copying the files into `agents/`.
+ *   LOCAL 6  a role→model map (`subagent-models.json`, user + project layers) applied
+ *            after discovery, so a role can run on its own model without editing the
+ *            agent file — which for a package-shipped agent lives inside the install
+ *            and is replaced on update. Frontmatter `model:` stays the fallback.
  *
  * Keep upstream diffs small: adapt, do not rewrite.
  */
@@ -27,6 +31,8 @@ import { CONFIG_DIR_NAME, getAgentDir, parseFrontmatter } from "@earendil-works/
 export type AgentScope = "user" | "project" | "both";
 /** LOCAL 2: `package` marks an agent shipped with this package. */
 export type AgentSource = "user" | "project" | "package";
+/** LOCAL 6: where the model on an agent came from. Undefined = inherit the dispatcher. */
+export type ModelSource = "frontmatter" | "user-map" | "project-map";
 
 export interface AgentConfig {
 	name: string;
@@ -38,6 +44,8 @@ export interface AgentConfig {
 	filePath: string;
 	/** LOCAL 2: repo-relative prefixes this agent may write. Undefined = unchecked. */
 	writeScope?: string[];
+	/** LOCAL 6: which layer supplied `model`, or undefined when the child inherits it. */
+	modelSource?: ModelSource;
 }
 
 export interface AgentDiscoveryResult {
@@ -81,6 +89,69 @@ function parseToolList(value: unknown): string[] | undefined {
 		.map((t) => t.trim())
 		.filter(Boolean);
 	return tools.length > 0 ? tools : undefined;
+}
+
+/**
+ * LOCAL 6: the role→model map. One JSON object, agent name → `provider/id`, with no other
+ * keys: this file exists to answer exactly one question ("which model does this role run
+ * on?"), and a per-agent blob here would be a second, drifting copy of the agent file.
+ *
+ * A bad read is not an error: an absent file, a broken file, or a value that is not a
+ * non-empty string simply contributes no pins, because discovery runs for every dispatch
+ * and one malformed map must not take the whole tool down.
+ */
+const MODEL_MAP_FILE = "subagent-models.json";
+
+export function readModelMap(file: string): Record<string, string> {
+	const map: Record<string, string> = {};
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(fs.readFileSync(file, "utf-8"));
+	} catch {
+		return map;
+	}
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return map;
+	for (const [name, value] of Object.entries(parsed as Record<string, unknown>)) {
+		if (typeof value !== "string") continue;
+		const model = value.trim();
+		if (model) map[name] = model;
+	}
+	return map;
+}
+
+/**
+ * The project layer: the nearest `subagent-models.json` under a `.pi/` directory, walking
+ * up from cwd — the same walk pi uses for a project agents dir, so the map travels with the
+ * checkout rather than with the invocation.
+ */
+export function findNearestModelMap(cwd: string): string | null {
+	let currentDir = cwd;
+	while (true) {
+		const candidate = path.join(currentDir, CONFIG_DIR_NAME, MODEL_MAP_FILE);
+		if (fs.existsSync(candidate)) return candidate;
+
+		const parentDir = path.dirname(currentDir);
+		if (parentDir === currentDir) return null;
+		currentDir = parentDir;
+	}
+}
+
+/**
+ * The user layer. `PI_SUBAGENT_MODEL_MAP` replaces the path outright — the selftest and CI
+ * need a map that cannot be contaminated by whatever the machine's owner has configured.
+ */
+export function userModelMapPath(): string {
+	const fromEnv = process.env.PI_SUBAGENT_MODEL_MAP;
+	if (fromEnv) return fromEnv;
+	return path.join(getAgentDir(), MODEL_MAP_FILE);
+}
+
+/**
+ * Both layers, weakest first. Exported so a caller (or a check script) can report where a
+ * role's model is coming from without duplicating the resolution rules.
+ */
+export function modelMapPaths(cwd: string): { user: string; project: string | null } {
+	return { user: userModelMapPath(), project: findNearestModelMap(cwd) };
 }
 
 function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
@@ -212,6 +283,27 @@ export function packageAgentsDir(): string {
 	return packageAgentsDirs()[0];
 }
 
+/**
+ * LOCAL 6: apply both map layers over a resolved agent set. Project beats user; frontmatter
+ * is what remains when neither map names the agent. Kept out of `discoverAgents` so the
+ * discovery path stays the short list of roots it was upstream, with one line of pinning.
+ */
+function applyModelMap(agents: Iterable<AgentConfig>, cwd: string): void {
+	const { user: userMapFile, project: projectMapFile } = modelMapPaths(cwd);
+	const userMap = readModelMap(userMapFile);
+	const projectMap = projectMapFile ? readModelMap(projectMapFile) : {};
+
+	for (const agent of agents) {
+		const pinned = projectMap[agent.name] ?? userMap[agent.name];
+		if (pinned) {
+			agent.model = pinned;
+			agent.modelSource = projectMap[agent.name] ? "project-map" : "user-map";
+		} else if (agent.model) {
+			agent.modelSource = "frontmatter";
+		}
+	}
+}
+
 export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryResult {
 	const userDir = path.join(getAgentDir(), "agents");
 	const projectAgentsDir = findNearestProjectAgentsDir(cwd);
@@ -232,6 +324,11 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 	} else {
 		for (const agent of projectAgents) agentMap.set(agent.name, agent);
 	}
+
+	// LOCAL 6: every source, not just the package ones — "this role runs on that model" is a
+	// property of the role. Applying it here rather than at spawn time means everything that
+	// reads discovery (the tool, a check script, a test) sees the model that will be used.
+	applyModelMap(agentMap.values(), cwd);
 
 	return { agents: Array.from(agentMap.values()), projectAgentsDir };
 }
