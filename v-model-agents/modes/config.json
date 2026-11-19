@@ -5,7 +5,8 @@
     "oracle",
     "plan",
     "build",
-    "yolo"
+    "yolo",
+    "forge"
   ],
   "modes": {
     "oracle": {
@@ -90,6 +91,36 @@
       "bash": "all",
       "keepExtensions": true,
       "promptFile": "prompts/yolo.md"
+    },
+    "forge": {
+      "label": "forge",
+      "badge": "⚒️ forge",
+      "color": "success",
+      "tools": [
+        "read",
+        "grep",
+        "find",
+        "ls",
+        "edit",
+        "write",
+        "subagent",
+        "bash"
+      ],
+      "writeDeny": [
+        ".claude",
+        ".codex",
+        ".agents",
+        ".pi",
+        ".github",
+        ".beads",
+        ".harness",
+        "harness",
+        "gate"
+      ],
+      "writeDenyReason": "this mode may not edit the forge machinery (.claude, .codex, .agents, .pi, .github, .beads, .harness, harness, gate) — those trees are the floors that watch the agent. Say what the change is and why, and leave it to the human.",
+      "bash": "all",
+      "keepExtensions": true,
+      "promptFile": "prompts/forge.md"
     }
   }
 }

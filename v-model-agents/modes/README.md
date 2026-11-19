@@ -15,7 +15,7 @@ modes/                  ← this package (the repo root manifest points here)
 ├── prompts/            one system-prompt contract per mode
 ├── tsconfig.json       typecheck only; pi loads the .ts itself
 ├── prepare-types.sh    links the pi release's types into node_modules
-├── selftest.mjs        38 assertions against the real extension, no pi needed
+├── selftest.mjs        52 assertions against the real extension, no pi needed
 └── check.sh            tsc + selftest
 ```
 
@@ -41,12 +41,35 @@ what you do in them.
 | `plan` | `docs/**` and `ledger.md` only | read-only + execute-class | producing a written plan, not a conversation |
 | `build` | source, never the test surface | unrestricted | implementing |
 | `yolo` | anything | unrestricted | experiments; not a delivery mode |
+| `forge` | anything but the machinery | unrestricted | autonomous task execution — claim, test-first, reviewed handoff |
 
-Keys: `alt+a` cycles, `Ctrl+1..4` jump straight to a mode, `Ctrl+Shift+M` toggles
+Keys: `alt+a` cycles, `Ctrl+1..5` jump straight to a mode, `Ctrl+Shift+M` toggles
 oracle ↔ build. (Not `Tab` — that must stay autocomplete-accept.) Commands: `/mode` opens
 a menu, `/mode <name>` switches, `--agent-mode <name>` starts a session already in one.
 The mode persists per session and is restored on resume; a brand-new session enters
 `config.default`.
+
+### `forge` — the one mode that changes a standing rule
+
+`forge` is for an autonomous code agent working a task to a handoff. It is the only mode whose
+prompt contract alters a rule that applies everywhere else, so the terms are explicit:
+
+- **Commits.** In a forge checkout (`harness/run-task.sh` present) working an active bead,
+  committing to the **task branch** and pushing that branch is the workflow and is done without
+  asking — a human merges, never you. Everywhere else, and for everything else (`main`, tags,
+  amend, force-push), the standing no-commit-without-an-explicit-go rule still holds: present the
+  diff and wait.
+- **Review.** In a forge checkout the harness owns review (`review-task.sh` posts it to the PR),
+  so the session dispatches none. Anywhere else the finished change set is reviewed
+  automatically by the `code-review-swarm` — two lanes, two models — on the same rationale as
+  `yolo`'s gate: the review stands in for oversight that was otherwise given up. Two model calls
+  per finished change set.
+- **The machinery is denied, not advised.** `writeDeny` covers `.claude`, `.codex`, `.agents`,
+  `.pi`, `.github`, `.beads`, `.harness`, `harness` and `gate`; the refusal happens at
+  `tool_call` and names `[forge]`. Those trees are the floors that watch the agent.
+
+The mode is the coarse belt. OS-level confinement (gondolin's mounts) is the fine one, and the
+worktree plus the repo's git hooks remain the boundary that actually binds a commit.
 
 ## Overrides
 
@@ -94,6 +117,7 @@ Keys per mode:
 | `dropTools` | removed even when `keepExtensions` kept them (e.g. `edit`, `write`) |
 | `writeScope` | repo-relative path prefixes it may write; `[]` = none, omitted = any |
 | `writeDeny` | prefixes it may never write, even inside `writeScope` |
+| `writeDenyReason` | the sentence shown when `writeDeny` refuses a write; defaults to the frozen-test-surface wording, so a mode whose deny list means something else (machinery, agent config) says what it actually protects |
 | `bash` | `none`, `safe` (read-only + execute-class allowlist), `all` |
 | `keepExtensions` | keep whatever tools were already active (extension tools included) |
 | `promptFile` | system-prompt contract appended for the mode |
@@ -110,7 +134,7 @@ cover `docs.md`; list exact filenames as exact filenames.
 ## Verify
 
 ```bash
-node selftest.mjs      # 38 assertions, no pi required
+node selftest.mjs      # 52 assertions, no pi required
 ./check.sh             # tsc + the selftest
 ```
 

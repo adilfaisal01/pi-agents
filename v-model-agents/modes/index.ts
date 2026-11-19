@@ -23,7 +23,7 @@
  *
  * Bindings:
  *   alt+a       cycle modes (forward)  — NOT Tab; Tab must stay autocomplete-accept
- *   Ctrl+1..4   jump directly to oracle / plan / build / yolo
+ *   Ctrl+1..5   jump directly to oracle / plan / build / yolo / forge
  *   Ctrl+Shift+M toggle oracle <-> build (one-key escape from a write mode)
  *
  * Commands / flags:
@@ -64,6 +64,13 @@ interface ModeConfig {
 	writeScope?: string[];
 	/** Repo-relative path prefixes this mode may never write (wins over writeScope). */
 	writeDeny?: string[];
+	/**
+	 * Reason shown when `writeDeny` refuses a write. Defaults to the frozen-test-surface
+	 * wording, which is what the shipped `build` mode means by its deny list; a mode whose
+	 * deny list means something else (machinery, agent config, a vendored tree) sets its own
+	 * so the refusal describes what it actually protects.
+	 */
+	writeDenyReason?: string;
 	bash: BashPolicy;
 	keepExtensions?: boolean;
 	promptFile?: string;
@@ -614,14 +621,14 @@ export default function agentModesExtension(pi: ExtensionAPI): void {
 
 	// --- flag ---------------------------------------------------------------
 	pi.registerFlag("agent-mode", {
-		description: "Start in a given agent mode (oracle|plan|build|yolo)",
+		description: "Start in a given agent mode (oracle|plan|build|yolo|forge)",
 		type: "string",
 		default: "",
 	});
 
 	// --- commands -----------------------------------------------------------
 	pi.registerCommand("mode", {
-		description: "Show or switch the agent mode (oracle|plan|build|yolo)",
+		description: "Show or switch the agent mode (oracle|plan|build|yolo|forge)",
 		handler: async (args, ctx) => {
 			const requested = args?.trim().toLowerCase();
 			if (requested) {
@@ -663,7 +670,7 @@ export default function agentModesExtension(pi: ExtensionAPI): void {
 	});
 
 	const order = config.order.filter((n) => config.modes[n]);
-	order.slice(0, 4).forEach((name, i) => {
+	order.slice(0, 5).forEach((name, i) => {
 		pi.registerShortcut(`ctrl+${i + 1}` as never, {
 			description: `Switch to ${name} mode`,
 			handler: async (ctx) => {
@@ -727,8 +734,10 @@ export default function agentModesExtension(pi: ExtensionAPI): void {
 				return {
 					block: true,
 					reason:
-						`[${mode.label}] refused: write to '${rel}' — the frozen test surface is locked ` +
-						`(${mode.writeDeny.join(", ")}). A test changes only by a recorded amendment; a build lane never edits one.`,
+						`[${mode.label}] refused: write to '${rel}' — ` +
+						(mode.writeDenyReason ??
+							`the frozen test surface is locked (${mode.writeDeny.join(", ")}). ` +
+								`A test changes only by a recorded amendment; a build lane never edits one.`),
 				};
 			}
 		}

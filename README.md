@@ -6,7 +6,7 @@ architect workflow (five skills, four role contracts).
 
 | Directory | What it is |
 | --- | --- |
-| [`v-model-agents/`](v-model-agents/) | Agent modes as a pi package (oracle / plan / build / yolo), plus the optional V-model discipline: rows-and-waves gate, freeze/pin, lock-check |
+| [`v-model-agents/`](v-model-agents/) | Agent modes as a pi package (oracle / plan / build / yolo / forge), plus the optional V-model discipline: rows-and-waves gate, freeze/pin, lock-check |
 | [`code-review-swarm/`](code-review-swarm/) | Two-model parallel code review; emits one SEV1–SEV4 table |
 | [`pi-subagent/`](pi-subagent/) | The `subagent` tool extension (isolated child `pi` processes, per-agent model pins, a `subagent-models.json` role→model map, a write-scope post-check) |
 | [`review-lanes/`](review-lanes/) | Lane provisioning: a checkout at a commit, and proof the code it ran came from there |
@@ -65,7 +65,7 @@ Two things worth knowing after an npm install:
 Pi packages:
 
 ```bash
-pi install "$PWD/v-model-agents"        # the modes (oracle / plan / build / yolo)
+pi install "$PWD/v-model-agents"        # the modes (oracle / plan / build / yolo / forge)
 pi install "$PWD/code-review-swarm"     # the skill + /review template
 pi install "$PWD/pi-subagent"           # the subagent tool the lanes dispatch through
 code-review-swarm/scripts/install.sh    # symlink the two lane agents into ~/.pi/agent/agents

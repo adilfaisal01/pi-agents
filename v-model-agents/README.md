@@ -9,8 +9,9 @@ policy, its own write scope, its own system-prompt contract, and optionally its 
 | `plan` | `docs/**` and `ledger.md` only | read-only + execute-class | producing a written plan, not a conversation |
 | `build` | source, never the test surface | unrestricted | implementing |
 | `yolo` | anything | unrestricted | experiments; not a delivery mode |
+| `forge` | anything but the machinery (`.claude`, `.codex`, `.agents`, `.pi`, `.github`, `.beads`, `.harness`, `harness`, `gate`) | unrestricted | autonomous task execution: claim, test-first, reviewed handoff — see [`forge-mode-plan.md`](../docs/forge-mode-plan.md) |
 
-`alt+a` cycles, `Ctrl+1..4` jump, `Ctrl+Shift+M` toggles oracle ↔ build. `/mode` opens a
+`alt+a` cycles, `Ctrl+1..5` jump, `Ctrl+Shift+M` toggles oracle ↔ build. `/mode` opens a
 menu, `--agent-mode <name>` starts a session already in one.
 
 A mode is a plugin rather than a skill because permissions are the one thing advice cannot
@@ -24,7 +25,7 @@ pi -e <this repo>          # try them for one session, no settings change
 
 Everything about the modes — the override layers, every `config.json` key, the keybinding
 map, and the limits of what a mode can enforce — is in **[`modes/README.md`](modes/README.md)**.
-Verify them with no model and no session: `./modes/check.sh` (tsc + 38 assertions).
+Verify them with no model and no session: `./modes/check.sh` (tsc + 52 assertions).
 
 ## Repo map
 

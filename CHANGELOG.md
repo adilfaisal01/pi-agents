@@ -23,3 +23,12 @@
   ask↔record coupling and the Stop floor.
 - `spec-authoring`'s stale Gate-B note was corrected to match `decompose` (Gate B is wired,
   `intake.sh analyze`, nine invariants).
+- **A fifth agent mode, `forge`** (`v-model-agents/modes`): autonomous task execution alongside
+  oracle / plan / build / yolo. Full tools plus a guaranteed `subagent`, unrestricted shell, and a
+  `writeDeny` over the machinery trees (`.claude`, `.codex`, `.agents`, `.pi`, `.github`, `.beads`,
+  `.harness`, `harness`, `gate`) refused at `tool_call`. Reachable by `Ctrl+5`, cycle, or `/mode`.
+  Its prompt contract is the one place a standing rule changes, and narrowly: in a forge checkout
+  with an active bead it commits and pushes the **task branch** without asking (a human merges);
+  everywhere else it presents the diff and waits. Review follows the same split — the harness owns
+  it in a forge checkout, the two-model swarm runs automatically anywhere else. Selftest grew from
+  38 to 52 assertions. Design and decisions: `docs/forge-mode-plan.md`.

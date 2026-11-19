@@ -8,7 +8,7 @@
 // entry directly (type stripping), so there is no build step and no test framework.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -82,6 +82,10 @@ function makeRepo() {
 	mkdirSync(path.join(dir, "tests"), { recursive: true });
 	mkdirSync(path.join(dir, "src"), { recursive: true });
 	mkdirSync(path.join(dir, "docs"), { recursive: true });
+	mkdirSync(path.join(dir, "harness"), { recursive: true });
+	mkdirSync(path.join(dir, ".claude", "hooks"), { recursive: true });
+	writeFileSync(path.join(dir, "harness", "run-task.sh"), "#!/usr/bin/env bash\nexit 0\n");
+	writeFileSync(path.join(dir, ".claude", "hooks", "deny.sh"), "#!/usr/bin/env bash\nexit 0\n");
 	writeFileSync(path.join(dir, "src", "app.py"), "value = 1\n");
 	writeFileSync(path.join(dir, "tests", "test_app.py"), "def test_x():\n    assert True\n");
 	writeFileSync(path.join(dir, "docs", "ledger.md"), "# ledger\n");
@@ -201,6 +205,43 @@ for (const cmd of refused) {
 	r = await call("bash", { command: cmd });
 	ok(`refuses: ${cmd}`, r?.block === true);
 }
+
+// --- forge mode: autonomous work, but never its own machinery ----------------
+const forgeMode = JSON.parse(readFileSync(path.join(HERE, "config.json"), "utf8"));
+ok("forge ships in the cycle order", forgeMode.order.includes("forge"), JSON.stringify(forgeMode.order));
+ok(
+	"forge ships a prompt contract",
+	Boolean(forgeMode.modes?.forge?.promptFile) &&
+		existsSync(path.join(HERE, forgeMode.modes.forge.promptFile)),
+	String(forgeMode.modes?.forge?.promptFile),
+);
+
+await shortcuts.get("ctrl+5").handler(ctx); // forge
+ok("ctrl+5 reaches forge mode", state.entries.at(-1)?.data?.mode === "forge");
+ok(
+	"forge keeps the write tools",
+	state.active.includes("edit") && state.active.includes("write"),
+	JSON.stringify(state.active),
+);
+ok("forge guarantees the subagent tool", state.active.includes("subagent"));
+r = await call("write", { path: "src/app.py", content: "value = 3\n" });
+ok("forge writes source", r === undefined, String(r?.reason ?? ""));
+for (const machinery of ["harness/run-task.sh", ".claude/hooks/deny.sh", ".beads/x.json", "gate/run-tests.sh"]) {
+	r = await call("write", { path: machinery, content: "x" });
+	ok(`forge refuses the machinery: ${machinery}`, r?.block === true, String(r?.reason ?? ""));
+}
+r = await call("write", { path: "harness/run-task.sh", content: "x" });
+ok("forge refusal names the mode", String(r?.reason).includes("[forge]"), String(r?.reason));
+ok(
+	"forge refusal describes the machinery, not the test surface",
+	String(r?.reason).includes("forge machinery") && !String(r?.reason).includes("frozen test surface"),
+	String(r?.reason),
+);
+r = await call("bash", { command: "git commit -am wip" });
+ok("forge leaves the shell unrestricted", r === undefined, String(r?.reason ?? ""));
+
+// Back to oracle: the drift audit below only applies in the safe (read-only) modes.
+await shortcuts.get("ctrl+1").handler(ctx); // oracle
 
 // Tracked-tree audit: an allowed command that changes a tracked file is reported.
 const result = (id, toolName = "bash") =>
