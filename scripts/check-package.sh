@@ -52,6 +52,9 @@ run "code-review-swarm: lanes and their model pins" code-review-swarm/scripts/se
 run "pi-subagent: the LOCAL changes" pi-subagent/check.sh
 run "review-lanes: worktree assertion" review-lanes/check.sh
 run "review-gate: stub-lane suite" review-gate/check.sh
+# Skip-capable: without `pi` this reports SKIP and exits 0, so a runner that cannot resolve a
+# model id does not fail the package — but a sample pin that has rotted DOES fail here.
+run "forge: role-model sample stays honest" forge/check-role-models.sh
 
 echo
 if [ "$FAILED" -eq 0 ]; then

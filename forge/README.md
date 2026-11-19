@@ -90,6 +90,42 @@ but through three different mechanisms, because they are three different kinds o
 | `reviewer` (PR review) | `harness/review-task.sh` on the host | `harness/reviewers.config` in the forge repo: `REVIEWER_BACKEND` + `<prefix>_MODEL`, with `SPEC_REVIEW_BACKEND` and `DISPOSITION_BACKEND` splittable. The file argues for a *different family* on the adjudicator |
 | the two review lenses (pi path, when the harness does not own review) | `code-review-swarm` lanes | each lane's `model:` frontmatter — two different ids on purpose |
 
+A worked map for the four dispatched roles — cross-provider on purpose, because two models from
+one family share blind spots:
+
+```json
+{
+  "architect": "anthropic/claude-sonnet-4-5",
+  "builder": "ollama-cloud/deepseek-v4.1-flash",
+  "spec-reviewer": "ollama-cloud/glm-5.3",
+  "disposition": "ollama/gpt-oss:120b-cloud"
+}
+```
+
+That is [`subagent-models.example.json`](subagent-models.example.json), shipped as a template. To
+use it, copy it to **one** of the two map paths and edit the ids to ones your install has:
+
+```bash
+cp subagent-models.example.json ~/.pi/agent/subagent-models.json            # you, every project
+cp subagent-models.example.json <repo>/.pi/subagent-models.json             # this checkout only
+```
+
+A file named `*.example.json` is inert — discovery reads `subagent-models.json` and nothing else,
+so the template never pins anything by accident. Verify a map before trusting it:
+
+```bash
+bash forge/check-role-models.sh   # sample keys == shipped roles, agents stay model-free, ids resolve
+```
+
+That check is part of `npm run check`. It needs no model call, and without `pi` on `PATH` it
+reports `skip` rather than failing — the same contract as the review lanes' model check. What it
+catches is the quiet one: a map key that matches no discovered agent is **silently ignored**, so a
+misspelled role (`spec-reviewer` typed as `spec_reviewer`) or the `reviewer` name this port retired
+looks like a pin and does nothing.
+
+Ids churn — `mistral-large-4` resolved when the swarm lanes were pinned and did not resolve here a
+week later — so re-run the check after a provider update rather than trusting the template's age.
+
 Two consequences worth knowing. An agent whose name is in the map gets `--model`, and an
 explicit model **drops the inherited thinking level** — so a pinned role thinks at its
 provider's default, not at the dispatcher's level. And the map beats frontmatter by design:

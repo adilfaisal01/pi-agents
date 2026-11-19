@@ -32,6 +32,14 @@
   everywhere else it presents the diff and waits. Review follows the same split — the harness owns
   it in a forge checkout, the two-model swarm runs automatically anywhere else. Selftest grew from
   38 to 52 assertions. Design and decisions: `docs/forge-mode-plan.md`.
+- **A `subagent-models.json` template** (`forge/subagent-models.example.json`): a
+  cross-provider map for the four dispatched forge roles, plus `forge/check-role-models.sh` — a
+  sixth `npm run check` suite, no model call, `skip` rather than failure where `pi` is absent. It
+  asserts three things: the sample's keys are exactly the shipped roles (a map key that matches no
+  agent is **silently ignored**, so a misspelled or retired role looks like a pin and does
+  nothing), no `forge/agents/*.md` carries a `model:` line (the agents stay model-free, so
+  `pi update` cannot clobber a pin the user owns), and every sample id resolves in this install.
+  The sample is itself inert — discovery reads `subagent-models.json`, never `*.example.json`.
 - **A role→model map for the subagent tool** (`pi-subagent`, LOCAL 6): `subagent-models.json`,
   keyed by agent name, in two layers — user (`~/.pi/agent/`) and project (nearest
   `<dir>/.pi/subagent-models.json`, walking up from the child's cwd). Precedence: project map →

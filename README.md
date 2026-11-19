@@ -183,6 +183,7 @@ bash v-model-agents/check.sh                 # modes typecheck + assertions, the
 bash code-review-swarm/scripts/selftest.sh   # frontmatter, lane contracts, both model ids resolve
 bash review-lanes/check.sh                   # syntax + lane self-test in a throwaway repo
 bash review-gate/check.sh                    # stub-lane suite: policy, exit codes, ledger, cross-file contracts
+bash forge/check-role-models.sh              # the role→model sample: keys match the shipped roles, ids resolve
 bash scripts/check-package.sh                # everything above, plus manifest and packed-tarball checks
 ```
 

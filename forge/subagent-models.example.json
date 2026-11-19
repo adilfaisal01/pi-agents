@@ -1,0 +1,6 @@
+{
+  "architect": "anthropic/claude-sonnet-4-5",
+  "builder": "ollama-cloud/deepseek-v4.1-flash",
+  "spec-reviewer": "ollama-cloud/glm-5.3",
+  "disposition": "ollama/gpt-oss:120b-cloud"
+}

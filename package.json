@@ -75,6 +75,8 @@
     "forge/skills",
     "forge/agents",
     "forge/README.md",
+    "forge/subagent-models.example.json",
+    "forge/check-role-models.sh",
     "pi-subagent/index.ts",
     "pi-subagent/agents.ts",
     "pi-subagent/README.md",
