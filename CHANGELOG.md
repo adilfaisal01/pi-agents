@@ -1,34 +1,25 @@
 # Changelog
 
-## [0.1.1] - 2026-11-18
+## [Unreleased]
 
-- **Publishing moved to GitHub Actions.** `.github/workflows/publish.yml` publishes on a
-  `v*` tag push, using OIDC trusted publishing when the `NPM_TOKEN` secret is unset and a
-  granular token when it is set. Actions are pinned to commit SHAs; the job refuses a tag
-  that disagrees with `package.json` and skips a version already on the registry.
-- **The model-pin check no longer requires a model registry.** `code-review-swarm`'s
-  selftest reports each lane's pin as `skip` on a runner without `pi`, instead of failing —
-  a skip, not a pass, so a real typo still fails. `pi` is now required only for `--live`.
-- Publishing the package now runs the full check first (`prepublishOnly` →
-  `scripts/check-package.sh`): manifest, packed tarball, and all five suites.
-
-## [0.1.0] - 2026-11-18
-
-First published version, as one package holding the five tools that used to be separate
-repositories.
-
-- **Agent modes** (`v-model-agents/modes`): `oracle` / `plan` / `build` / `yolo`, each with
-  its own tool set, shell policy, write scope and prompt contract. Ships no model ids; set
-  them in `~/.pi/agent/agent-modes.json`.
-- **Code review swarm** (`code-review-swarm`): two lanes on two models, one SEV1–SEV4
-  table, `/review` template, per-lane checkouts via `review-lanes`.
-- **Subagent tool** (`pi-subagent`): isolated child `pi` processes with per-agent model
-  pins, a write-scope post-check, and — new in this release — `pi.agents` in the package
-  manifest, so one package can ship an extension and its agent definitions.
-- **Review gate** (`review-gate`): `swarm-gate` turns the two lanes into an exit code, with
-  a loop guard and a round budget. 72 stub-lane cases, no model calls.
-- **Lane provisioning** (`review-lanes`): a worktree at a commit, plus an assertion that the
-  package resolved from inside it.
-
-`swarm-gate` and `review-lanes` are installed as `bin` entries. Both need `python3` (the
-gate) or `git` (the lanes), and bash.
+- **The shinro-forge architect workflow ships with the package** (`forge/`): the `clarify`,
+  `spec-authoring`, `decompose`, `forge-review` and `forge-workflow` skills on `pi.skills`, and
+  the `architect` / `builder` / `spec-reviewer` / `disposition` role contracts on `pi.agents`.
+  A pi session gets the intake workflow without sitting inside a forge
+  checkout.
+- **The forge's single `reviewer` role is retired on this surface.** A pi-driven forge review is
+  now the two-model code-review-swarm, with the new `forge-review` skill bridging its merged
+  SEV1–SEV4 table into the sentinel-bounded JSON block `harness/review-task.sh` extracts
+  (`SEV1→CRITICAL … SEV4→LOW`, `path:line (symbol) → path:line`, verdict from the SEV1 count).
+  Both lanes feed the record and the `disposition` adjudicator, whose input contract now reads
+  the merged table. Cost: three model calls per reviewed PR where it used to be one. The forge's
+  own `.claude/agents/reviewer.md` is untouched, so the Claude path and the ollama /
+  `claude-fresh` / codex backends are unaffected.
+- **These are pi renders, not copies.** `ask_user_question` is named literally (the neutral
+  render's "the interactive ask tool" has no referent in a pi run without the ask
+  extension), and every sentence that claimed a `.claude/hooks/**` gate enforces something
+  now says what actually does: the host-side harness floors, the contract's own tool list
+  and `write_scope` post-check, and — named as unenforced — the round budget, the
+  ask↔record coupling and the Stop floor.
+- `spec-authoring`'s stale Gate-B note was corrected to match `decompose` (Gate B is wired,
+  `intake.sh analyze`, nine invariants).

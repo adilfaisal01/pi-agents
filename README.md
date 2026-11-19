@@ -1,15 +1,17 @@
 # pi-agents
 
-One workspace for five Pi agent tools: per-mode permissions, a two-model code review, the
-`subagent` dispatch tool, a review gate, and a lane-provisioning helper.
+One workspace for the Pi agent tools: per-mode permissions, a two-model code review, the
+`subagent` dispatch tool, a review gate, a lane-provisioning helper, and the shinro-forge
+architect workflow (five skills, four role contracts).
 
 | Directory | What it is |
 | --- | --- |
 | [`v-model-agents/`](v-model-agents/) | Agent modes as a pi package (oracle / plan / build / yolo), plus the optional V-model discipline: rows-and-waves gate, freeze/pin, lock-check |
 | [`code-review-swarm/`](code-review-swarm/) | Two-model parallel code review; emits one SEV1–SEV4 table |
-| [`pi-subagent/`](pi-subagent/) | The `subagent` tool extension (isolated child `pi` processes, per-agent model pins) |
+| [`pi-subagent/`](pi-subagent/) | The `subagent` tool extension (isolated child `pi` processes, per-agent model pins, a `subagent-models.json` role→model map, a write-scope post-check) |
 | [`review-lanes/`](review-lanes/) | Lane provisioning: a checkout at a commit, and proof the code it ran came from there |
 | [`review-gate/`](review-gate/) | `swarm-gate`: turns the swarm into an exit code, with a loop guard and a round budget |
+| [`forge/`](forge/README.md) | The shinro-forge architect workflow as a pi package surface: the `clarify`, `spec-authoring`, `decompose`, `forge-review` and `forge-workflow` skills, plus the `architect` / `builder` / `spec-reviewer` / `disposition` role contracts |
 
 Four of the five are imported repositories, preserved with their own history (git subtree);
 `review-gate/` was written in this tree. Every script derives its own paths, so nothing
@@ -33,8 +35,8 @@ pi install npm:@adilfaisal01/pi-agents
 ```
 
 That is both extensions (the modes and the `subagent` tool), both skills, the `/review`
-template, and the two review lane agents. The two shell tools come with it as `bin`
-entries:
+template, the two review lane agents, and the five forge skills with their four role
+contracts. The two shell tools come with it as `bin` entries:
 
 ```bash
 npx -y @adilfaisal01/pi-agents swarm-gate        # review the current change set
@@ -130,6 +132,26 @@ It is not part of `@adilfaisal01/pi-agents`, so the install above does not pull 
 installing it changes nothing on its own — you (or a prompt you write) drive the loop, and
 the gate fires on a finished change either way.
 
+## The forge architect workflow
+
+`forge/` carries the shinro-forge intake workflow on the package surface, so a pi session gets
+it without sitting inside a forge checkout:
+
+- **Skills** (`forge/skills/`): `clarify` (the one-question-at-a-time loop that bounds
+  *questions*, never coverage), `spec-authoring` (stories, FR-NNN, measurable SC-NNN),
+  `decompose` (the machine-parseable Task Breakdown), `forge-review` (two-model PR review,
+  bridged to the forge's machine-checkable record), `forge-workflow` (bead → worktree →
+  test-first → PR).
+- **Role contracts** (`forge/agents/`, read by the `subagent` tool via `pi.agents`):
+  `architect` (writes only under `specs/`, never ratifies), `builder` (only under `sandbox/`,
+  never merges), and the read-only `spec-reviewer` and `disposition`.
+
+There is no `reviewer` here, deliberately: one model reviewing a PR cannot make its own
+agreement evidence, so a forge PR review is the **code-review-swarm** — two lanes, two
+models — with `forge-review` turning the merged SEV1–SEV4 table into the sentinel-bounded
+JSON block the harness extracts for `.harness/review/<pr>.json` and the `disposition`
+adjudicator. Both lanes feed it; quality findings are normalised, not filtered out.
+
 ## Verifying a checkout
 
 Everything below runs without dispatching a model:
@@ -139,6 +161,7 @@ bash v-model-agents/check.sh                 # modes typecheck + assertions, the
 bash code-review-swarm/scripts/selftest.sh   # frontmatter, lane contracts, both model ids resolve
 bash review-lanes/check.sh                   # syntax + lane self-test in a throwaway repo
 bash review-gate/check.sh                    # stub-lane suite: policy, exit codes, ledger, cross-file contracts
+bash scripts/check-package.sh                # everything above, plus manifest and packed-tarball checks
 ```
 
 None of them dispatches a model. `selftest.sh` and `install.sh check` ask
