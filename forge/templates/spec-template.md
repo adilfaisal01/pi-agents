@@ -132,20 +132,20 @@ drift from.
 
 ### Field schema (per task)
 
-| field                | type     | rule                                                                                                                                                                                                                    |
-| -------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`                 | string   | `^T[0-9]{3}$`; unique within this spec. The task's identity everywhere in the audit trail.                                                                                                                             |
-| `title`              | string   | imperative one-liner.                                                                                                                                                                                                    |
-| `satisfies`          | string[] | ≥1 entry; each matches `FR-[0-9]{3}` or a story id like `US1`. Traceability to requirements/stories.                                                                                                                    |
-| `priority`           | string   | one of `P1`, `P2`, `P3`.                                                                                                                                                                                                |
-| `depends_on`         | string[] | local task ids (e.g. `["T001"]`); may be empty `[]`; the graph **MUST** be acyclic.                                                                                                                                     |
-| `target_repo`        | string   | the repo this task lands in; **MUST** be one of the top-level `target_repos`.                                                                                                                                           |
-| `definition_of_done` | string[] | ≥1 binary, checkable condition for **this** task, including a test that fails first then passes.                                                                                                                        |
-| `success_criteria`   | string[] | ≥1 measurable, technology-agnostic criterion; may reference an `SC-NNN` or state an inline threshold.                                                                                                                   |
-| `scope`              | string[] | ≥1 entry; each a repo-relative **glob** naming the files this task's build may touch. Normative format below (invariant 7); enforced by `forge-gate complete` against the task commit's diff.                            |
-| `dod_tests`          | string[] | ≥1 entry; each a runnable **test selector** — the mechanical Definition of Done. Normative grammar below (invariant 8); executed by `forge-gate build`, never by `analyze`.                                              |
-| `sc_evidence`        | object[] | ≥1 entry; each `{"sc": N, "path": "<file>"[, "must_match": "<ERE>"][, "must_not_match": "<ERE>"]}` — `N` a **1-based index** into this task's `success_criteria`, `path` repo-relative. Bidirectional (invariant 9).      |
-| `verification`       | string   | optional but recommended: the command that proves the DoD (the red→green hook).                                                                                                                                         |
+| field | type | rule |
+| --- | --- | --- |
+| `id` | string | `^T[0-9]{3}$`; unique within this spec. The task's identity everywhere in the audit trail. |
+| `title` | string | imperative one-liner. |
+| `satisfies` | string[] | ≥1 entry; each matches `FR-[0-9]{3}` or a story id like `US1`. Traceability to requirements/stories. |
+| `priority` | string | one of `P1`, `P2`, `P3`. |
+| `depends_on` | string[] | local task ids (e.g. `["T001"]`); may be empty `[]`; the graph **MUST** be acyclic. |
+| `target_repo` | string | the repo this task lands in; **MUST** be one of the top-level `target_repos`. |
+| `definition_of_done` | string[] | ≥1 binary, checkable condition for **this** task, including a test that fails first then passes. |
+| `success_criteria` | string[] | ≥1 measurable, technology-agnostic criterion; may reference an `SC-NNN` or state an inline threshold. |
+| `scope` | string[] | ≥1 entry; each a repo-relative **glob** naming the files this task's build may touch. Normative format below (invariant 7); enforced by `forge-gate complete` against the task commit's diff. |
+| `dod_tests` | string[] | ≥1 entry; each a runnable **test selector** — the mechanical Definition of Done. Normative grammar below (invariant 8); executed by `forge-gate build`, never by `analyze`. |
+| `sc_evidence` | object[] | ≥1 entry; each `{"sc": N, "path": "<file>"[, "must_match": "<ERE>"][, "must_not_match": "<ERE>"]}` — `N` a **1-based index** into this task's `success_criteria`, `path` repo-relative. Bidirectional (invariant 9). |
+| `verification` | string | optional but recommended: the command that proves the DoD (the red→green hook). |
 
 `definition_of_done` and `success_criteria` are what the human reads at the breakdown sign-off. The
 three machine fields (`scope`, `dod_tests`, `sc_evidence`) are what the mechanical checks enforce. Both
@@ -173,6 +173,13 @@ The `::pattern` form is rejected: pattern execution is not a defined convention.
 An **`sc_evidence` path** is a repo-relative file path: non-empty, not absolute, no `..`, matching
 `^[A-Za-z0-9][A-Za-z0-9._/-]*$`, and matched by ≥1 of this task's `scope` globs — so the evidence the
 build creates is always stageable in-scope.
+
+`analyze` validates only that shape. **`forge-gate complete` verifies the evidence itself**: the path
+must exist in the task commit's tree (`missing-from-tree`), must not be a symlink, and when the entry
+carries `must_match` / `must_not_match` the committed blob must satisfy that ERE (`evidence-content-
+mismatch` / `evidence-content-forbidden`). An entry with neither pattern asserts existence only and the
+trail records `evidence-existence-only` as an advisory — present, but content unverified. A criterion
+whose evidence never appears is not met, so the task cannot complete.
 
 #### Matching semantics (normative, both directions)
 

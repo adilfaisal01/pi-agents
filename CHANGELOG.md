@@ -32,6 +32,15 @@
   everywhere else it presents the diff and waits. Review follows the same split — the harness owns
   it in a forge checkout, the two-model swarm runs automatically anywhere else. Selftest grew from
   38 to 52 assertions. Design and decisions: `docs/forge-mode-plan.md`.
+- **`forge-gate complete` verifies evidence instead of trusting its name.** `analyze` proves only that
+  an `sc_evidence` path is well-formed and in scope; until now nothing checked the file existed, so a
+  spec could name evidence the build never created and the task still completed. `complete` now reads
+  each path out of the task commit and refuses `missing-from-tree` (absent from the commit's tree —
+  present in the worktree is not enough), a symlink in place of a file, `evidence-content-mismatch`
+  (a `must_match` ERE the committed blob does not satisfy) and `evidence-content-forbidden` (a
+  `must_not_match` it does). An entry with neither pattern still completes and the trail records
+  `evidence-existence-only`, so "present but unverified" is a recorded state rather than an implied
+  one. `check-gate.sh`: 46 → 52 fixtures.
 - **Worktree isolation per task, in any repo.** `forge-gate claim` now creates two worktrees beside
   the checkout — `<repo>.forge/<slug>/` on `forge/<slug>` (the integration branch, i.e. the PR) and
   `<repo>.forge/<slug>/<T00N>/` on `forge/<slug>-<T00N>` (where the builder works) — so the forge

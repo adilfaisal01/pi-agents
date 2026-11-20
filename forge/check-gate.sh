@@ -97,7 +97,9 @@ task = {
 }
 extra = dict(task, id="T002", title="the dependent thing", satisfies=["FR-002"],
              depends_on=["T001"], priority="P2")
-block = {"spec_version": "forge/v1", "target_repos": ["fixture"], "tasks": [task, extra]}
+third = dict(task, id="T003", title="the third thing", satisfies=["FR-001"],
+             depends_on=["T002"], priority="P3")
+block = {"spec_version": "forge/v1", "target_repos": ["fixture"], "tasks": [task, extra, third]}
 
 if defect == "missing-key":
     del block["tasks"][0]["scope"]
@@ -134,6 +136,18 @@ elif defect == "undefined-fr":
     block["tasks"][0]["satisfies"] = ["FR-009", "US1"]
 elif defect == "withdrawn-fr":
     pass
+elif defect == "missing-evidence":
+    block["tasks"][1]["sc_evidence"] = [{"sc": 1, "path": "src/evidence/never-created.txt"}]
+elif defect == "untracked-evidence":
+    block["tasks"][1]["sc_evidence"] = [{"sc": 1, "path": "src/evidence/e2.txt"}]
+elif defect == "must-match":
+    block["tasks"][1]["sc_evidence"] = [
+        {"sc": 1, "path": "src/evidence/e1.txt", "must_match": "PASS [0-9]+ of [0-9]+"}
+    ]
+elif defect == "must-not-match":
+    block["tasks"][1]["sc_evidence"] = [
+        {"sc": 1, "path": "src/evidence/e1.txt", "must_not_match": "PASS"}
+    ]
 elif defect == "red-selector":
     block["tasks"][0]["dod_tests"] = ["tests/broken.sh"]
 elif defect == "no-tasks":
@@ -322,6 +336,7 @@ write_spec ok
 
 # complete: refuses without a review, then with open SEV1/2, then accepts and merges.
 printf 'value = 2\n' >"$TASK/src/app.py"
+mkdir -p "$TASK/src/evidence" && printf 'all slug cases pass\n' >"$TASK/src/evidence/e1.txt"
 git -C "$TASK" add -A >/dev/null 2>&1
 git -C "$TASK" commit -qm "T001 inside scope"
 INSIDE=$(git -C "$TASK" rev-parse HEAD)
@@ -347,16 +362,107 @@ else
 	bad "complete fast-forwards the integration branch onto the task branch"
 fi
 
-# a commit on the task branch that escapes the declared scope
-"$GATE" claim specs/001-fixture T002 >/dev/null 2>&1
+# --- evidence verification ------------------------------------------------
+# `analyze` proves the paths are well-formed and in scope; only `complete` proves the evidence
+# exists in the commit. Each case here breaks one of those and expects a named refusal.
+commit_in_task() {
+	# commit_in_task <worktree> <message>  → prints the sha
+	git -C "$1" add -A >/dev/null 2>&1
+	git -C "$1" commit -qm "$2"
+	git -C "$1" rev-parse HEAD
+}
+
+"$GATE" claim specs/001-fixture T002 >/dev/null 2>&1 || true
 TASK2="$INTEG/T002"
-mkdir -p "$TASK2/docs" && printf 'x\n' >"$TASK2/docs/x.txt"
-git -C "$TASK2" add -A >/dev/null 2>&1
-git -C "$TASK2" commit -qm "T002 escapes scope"
-OUTSIDE=$(git -C "$TASK2" rev-parse HEAD)
+
+write_spec missing-evidence
 "$GATE" build specs/001-fixture T002 >/dev/null 2>&1 || true
 "$GATE" review specs/001-fixture T002 --verdict CLEAN --findings 0 --open-sev12 0 >/dev/null 2>&1
-out=$("$GATE" complete specs/001-fixture T002 --commit "$OUTSIDE" 2>&1)
+printf 'x\n' >"$TASK2/src/app.py"
+SHA=$(commit_in_task "$TASK2" "T002 without its evidence")
+out=$("$GATE" complete specs/001-fixture T002 --commit "$SHA" 2>&1)
+if [ $? -eq 1 ] && printf '%s' "$out" | grep -qF 'missing-from-tree'; then
+	ok "complete refuses evidence that is not in the commit"
+else
+	bad "complete refuses evidence that is not in the commit"; printf '%s\n' "$out" | sed 's/^/        /'
+fi
+
+# present on disk but never committed: the commit is what an auditor reads. The path must be one
+# the tree does not already carry from an earlier task, or "in the tree" would be true for the
+# wrong reason.
+write_spec untracked-evidence
+mkdir -p "$TASK2/src/evidence" && printf 'uncommitted\n' >"$TASK2/src/evidence/e2.txt"
+printf 'value = 3\n' >"$TASK2/src/app.py"
+git -C "$TASK2" add src/app.py >/dev/null 2>&1          # deliberately not the evidence
+git -C "$TASK2" commit -qm "T002 with evidence left untracked"
+SHA=$(git -C "$TASK2" rev-parse HEAD)
+out=$("$GATE" complete specs/001-fixture T002 --commit "$SHA" 2>&1)
+if [ $? -eq 1 ] && printf '%s' "$out" | grep -qF 'missing-from-tree'; then
+	ok "evidence in the worktree but not in the commit is refused"
+else
+	bad "evidence in the worktree but not in the commit is refused"; printf '%s\n' "$out" | sed 's/^/        /'
+fi
+
+# content assertions
+write_spec must-match
+printf 'value = 4\n' >"$TASK2/src/app.py"
+printf 'no numbers here\n' >"$TASK2/src/evidence/e1.txt"
+SHA=$(commit_in_task "$TASK2" "T002 evidence without the required pattern")
+out=$("$GATE" complete specs/001-fixture T002 --commit "$SHA" 2>&1)
+if [ $? -eq 1 ] && printf '%s' "$out" | grep -qF 'evidence-content-mismatch'; then
+	ok "must_match is enforced against the committed blob"
+else
+	bad "must_match is enforced against the committed blob"; printf '%s\n' "$out" | sed 's/^/        /'
+fi
+write_spec must-not-match
+printf 'PASS 3 of 3\n' >"$TASK2/src/evidence/e1.txt"
+printf 'value = 5\n' >"$TASK2/src/app.py"
+SHA=$(commit_in_task "$TASK2" "T002 evidence with a forbidden pattern")
+out=$("$GATE" complete specs/001-fixture T002 --commit "$SHA" 2>&1)
+if [ $? -eq 1 ] && printf '%s' "$out" | grep -qF 'evidence-content-forbidden'; then
+	ok "must_not_match is enforced against the committed blob"
+else
+	bad "must_not_match is enforced against the committed blob"; printf '%s\n' "$out" | sed 's/^/        /'
+fi
+
+# a symlink is not evidence
+write_spec ok
+rm -f "$TASK2/src/evidence/e1.txt"
+ln -s ../../tests/run.sh "$TASK2/src/evidence/e1.txt"
+printf 'value = 6\n' >"$TASK2/src/app.py"
+SHA=$(commit_in_task "$TASK2" "T002 with symlinked evidence")
+out=$("$GATE" complete specs/001-fixture T002 --commit "$SHA" 2>&1)
+if [ $? -eq 1 ] && printf '%s' "$out" | grep -qF 'is a symlink'; then
+	ok "symlinked evidence is refused"
+else
+	bad "symlinked evidence is refused"; printf '%s\n' "$out" | sed 's/^/        /'
+fi
+
+# existence-only completes, and the trail says the content was not verified
+write_spec ok
+rm -f "$TASK2/src/evidence/e1.txt"                     # the symlink from the case above
+git -C "$TASK2" checkout -- tests/run.sh              # ... which a printf through had rewritten
+mkdir -p "$TASK2/src/evidence" && printf 'real evidence\n' >"$TASK2/src/evidence/e1.txt"
+printf 'value = 7\n' >"$TASK2/src/app.py"
+SHA=$(commit_in_task "$TASK2" "T002 with existence-only evidence")
+out=$("$GATE" complete specs/001-fixture T002 --commit "$SHA" 2>&1)
+if [ $? -eq 0 ] && grep -q 'evidence-existence-only' specs/001-fixture/records.jsonl; then
+	ok "existence-only evidence completes and is recorded as an advisory"
+else
+	bad "existence-only evidence completes and is recorded as an advisory"; printf '%s\n' "$out" | sed 's/^/        /'
+fi
+
+# a commit on the task branch that escapes the declared scope
+write_spec ok
+"$GATE" claim specs/001-fixture T003 >/dev/null 2>&1 || true
+TASK3="$INTEG/T003"
+mkdir -p "$TASK3/docs" && printf 'x\n' >"$TASK3/docs/x.txt"
+printf 'value = 8\n' >"$TASK3/src/app.py"
+mkdir -p "$TASK3/src/evidence" && printf 'e\n' >"$TASK3/src/evidence/e1.txt"
+OUTSIDE=$(commit_in_task "$TASK3" "T003 escapes scope")
+"$GATE" build specs/001-fixture T003 >/dev/null 2>&1 || true
+"$GATE" review specs/001-fixture T003 --verdict CLEAN --findings 0 --open-sev12 0 >/dev/null 2>&1
+out=$("$GATE" complete specs/001-fixture T003 --commit "$OUTSIDE" 2>&1)
 if [ $? -eq 1 ] && printf '%s' "$out" | grep -qF 'outside its scope'; then
 	ok "complete refuses a commit that escapes the task's scope"
 else

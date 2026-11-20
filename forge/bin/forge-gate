@@ -723,6 +723,64 @@ def cmd_review(args: argparse.Namespace) -> int:
     return 0
 
 
+
+# --- evidence verification ---------------------------------------------------
+# `analyze` only proves the evidence paths are well-formed and in scope. That is not the same as
+# the evidence existing: a spec can name `src/evidence/sc1.txt`, the build never create it, and
+# every later step still say "done". So `complete` reads the paths out of the commit itself and
+# checks what the harness's acceptance gate checks — present in the tree at that commit, not a
+# symlink, and matching `must_match` / `must_not_match` when the criterion asserts content.
+
+def regex_hits(pattern: str, text: str) -> bool:
+    """Line-oriented ERE search, mirroring `grep -E` (a pattern never spans a newline)."""
+    try:
+        rx = re.compile(pattern)
+    except re.error:
+        return False
+    return any(rx.search(line) for line in text.splitlines())
+
+
+def verify_evidence(wt: Path, commit: str, task: dict) -> tuple[list[dict], list[str], list[str]]:
+    """Return (records, failures, advisories) for this task's sc_evidence at `commit`."""
+    records: list[dict] = []
+    failures: list[str] = []
+    advisories: list[str] = []
+    for entry in task.get("sc_evidence") or []:
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get("path")
+        sc = entry.get("sc")
+        if not isinstance(path, str):
+            continue
+        listing = git("ls-tree", commit, "--", path, cwd=wt, check=False)
+        if not listing.strip():
+            failures.append(f"sc={sc} {path}: missing-from-tree — the evidence is not in {commit[:8]}")
+            records.append({"sc": sc, "path": path, "ok": False, "why": "missing-from-tree"})
+            continue
+        mode = listing.split()[0]
+        if mode == "120000":
+            failures.append(f"sc={sc} {path}: is a symlink — evidence must be a real file, not a link")
+            records.append({"sc": sc, "path": path, "ok": False, "why": "symlink"})
+            continue
+        content = git("show", f"{commit}:{path}", cwd=wt, check=False)
+        must_match = entry.get("must_match")
+        must_not_match = entry.get("must_not_match")
+        if must_match is None and must_not_match is None:
+            advisories.append(f"sc={sc} {path}: evidence-existence-only — asserts existence, content unverified")
+            records.append({"sc": sc, "path": path, "ok": True, "why": "existence-only"})
+            continue
+        if isinstance(must_match, str) and not regex_hits(must_match, content):
+            failures.append(f"sc={sc} {path}: evidence-content-mismatch — does not match must_match {must_match!r}")
+            records.append({"sc": sc, "path": path, "ok": False, "why": "content-mismatch"})
+            continue
+        if isinstance(must_not_match, str) and regex_hits(must_not_match, content):
+            failures.append(f"sc={sc} {path}: evidence-content-forbidden — matches must_not_match {must_not_match!r}")
+            records.append({"sc": sc, "path": path, "ok": False, "why": "content-forbidden"})
+            continue
+        records.append({"sc": sc, "path": path, "ok": True, "why": "content-verified"})
+    return records, failures, advisories
+
+
 def cmd_complete(args: argparse.Namespace) -> int:
     d, _ = spec_paths(args.spec_dir)
     rows = read_rows(d)
@@ -768,6 +826,20 @@ def cmd_complete(args: argparse.Namespace) -> int:
             f"{scope}: {', '.join(outside)}"
         )
 
+    # evidence: named is not verified — read the paths out of the commit and check them
+    ev_records, ev_failures, ev_advisories = verify_evidence(wt, args.commit, task)
+    for a in ev_advisories:
+        print(f"  advisory  {a}")
+    if ev_failures:
+        for f in ev_failures:
+            print(f"  FAIL  {f}")
+        raise Refused(
+            f"complete: {args.task} names evidence that does not verify — a criterion without its "
+            "artifact is not met"
+        )
+    if ev_records:
+        print(f"  ok    evidence verified: {len(ev_records)} entr(y/ies) at {args.commit[:8]}")
+
     # land it: fast-forward the integration branch onto the task branch, inside the integration
     # worktree (so the repo checkout and its current branch are never touched)
     branch = f"forge/{d.name}"
@@ -797,6 +869,8 @@ def cmd_complete(args: argparse.Namespace) -> int:
             "merged": merged,
             "branch": branch,
             "paths": changed,
+            "evidence": ev_records,
+            "evidence_advisories": ev_advisories,
         },
     )
     print(f"complete: {args.task} ({len(changed)} path(s), all in scope)")

@@ -42,7 +42,7 @@ each arrow checkable:
 | claim | `forge-gate claim <spec> T00N` | unratified spec, a failing `analyze`, an incomplete `depends_on`, a checkout sitting on the integration branch |
 | build | `forge-gate build <spec> T00N` | nothing — it *runs* the `dod_tests` selectors and records green/red itself |
 | review | `forge-gate review <spec> T00N --verdict … --open-sev12 N` | nothing; it records what the lanes said |
-| complete | `forge-gate complete <spec> T00N --commit SHA` | no green build, no review, open SEV1/SEV2, a commit that escaped the task's `scope`, an integration branch that cannot fast-forward |
+| complete | `forge-gate complete <spec> T00N --commit SHA` | no green build, no review, open SEV1/SEV2, a commit that escaped the task's `scope`, **evidence missing from the commit's tree / a symlink / failing `must_match` / hitting `must_not_match`**, an integration branch that cannot fast-forward |
 | finish | `forge-gate finish <spec>` | an incomplete task, a failing `analyze --strict`, a missing trail row |
 | clean | `forge-gate clean <spec> [--force]` | a dirty worktree, without `--force` |
 | audit | `forge-gate report <spec>` | a `records.jsonl` line that is not one JSON object per line |
@@ -80,6 +80,12 @@ Two properties worth stating plainly, because they are the whole regulatory argu
 - **Green means the gate ran it.** `build` executes each `dod_tests` selector (`timeout … bash
   <selector>`) and records the exit code; `complete` reads that row. An agent saying "tests pass" is
   not a state the gate can be in.
+- **Evidence is checked, not named.** `analyze` only proves an `sc_evidence` path is well-formed and
+  in scope; `complete` reads the path out of the task commit and requires it in the tree
+  (`missing-from-tree`), as a real file rather than a symlink, and — when the criterion carries
+  `must_match` / `must_not_match` — with the committed blob satisfying that ERE. An entry asserting
+  existence only completes, and the trail records `evidence-existence-only` so the gap is visible
+  rather than implied.
 
 `forge-gate` is python3 stdlib, no network, no model — `bin/` entry, so `npx … forge-gate` works from
 an install. Schema and invariants: [`templates/spec-template.md`](templates/spec-template.md);

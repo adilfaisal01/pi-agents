@@ -68,6 +68,17 @@ untouched on `main`; against a local bare remote, `finish` created `audit: specs
 trail)` (spec + understanding + records), pushed it, and refused only at `gh pr create` (no GitHub
 remote) — the one step not proven end-to-end.
 
+### Follow-on: evidence verification (2026-11-19, step 1 of the harness parity list)
+
+The harness's acceptance gate checks that `sc_evidence` is *real*; `forge-gate` only checked its shape.
+Now `complete` does the harness's checks against the task commit: `missing-from-tree`, symlink refusal,
+`must_match` / `must_not_match` against the committed blob, and an `evidence-existence-only` advisory
+recorded in the trail when a criterion asserts nothing. 52 fixtures (was 46).
+
+One fixture earned its keep twice: it wrote through a symlinked evidence file (`ln -s ../../tests/run.sh
+src/evidence/e1.txt`, then `printf >`), which rewrote `tests/run.sh` and was then caught by the *scope*
+check — a live demonstration of why the symlink refusal exists.
+
 **Still deferred:** LOCAL 7 (`scope` per dispatch on `subagent`). Without it a builder is not
 stopped from writing outside its task's scope *during* the run — it is caught at `complete`, which
 refuses the task and names the paths. That is later and coarser than a dispatch-time guard, but it is
