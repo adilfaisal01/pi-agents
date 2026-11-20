@@ -49,26 +49,33 @@ a menu, `/mode <name>` switches, `--agent-mode <name>` starts a session already 
 The mode persists per session and is restored on resume; a brand-new session enters
 `config.default`.
 
-### `forge` — the one mode that changes a standing rule
+### `forge` — spec-first work, with the exception it needs
 
-`forge` is for an autonomous code agent working a task to a handoff. It is the only mode whose
-prompt contract alters a rule that applies everywhere else, so the terms are explicit:
+`forge` is for autonomous work that has to be **traceable**: it runs the intake pipeline instead of
+writing code and describing it afterwards.
 
-- **Commits.** In a forge checkout (`harness/run-task.sh` present) working an active bead,
-  committing to the **task branch** and pushing that branch is the workflow and is done without
-  asking — a human merges, never you. Everywhere else, and for everything else (`main`, tags,
-  amend, force-push), the standing no-commit-without-an-explicit-go rule still holds: present the
-  diff and wait.
-- **Review.** In a forge checkout the harness owns review (`review-task.sh` posts it to the PR),
-  so the session dispatches none. Anywhere else the finished change set is reviewed
-  automatically by the `code-review-swarm` — two lanes, two models — on the same rationale as
-  `yolo`'s gate: the review stands in for oversight that was otherwise given up. Two model calls
-  per finished change set.
-- **The machinery is denied, not advised.** `writeDeny` covers `.claude`, `.codex`, `.agents`,
-  `.pi`, `.github`, `.beads`, `.harness`, `harness` and `gate`; the refusal happens at
-  `tool_call` and names `[forge]`. Those trees are the floors that watch the agent.
+```text
+objective → spec (specs/NNN-<slug>/) → Gate A (human ratifies) → numbered tasks T001…
+          → build each (tests run by the gate) → review each → one reviewed PR
+```
 
-The mode is the coarse belt. OS-level confinement (gondolin's mounts) is the fine one, and the
+The pieces: the `forge` skills (clarify, spec-authoring, decompose), the role contracts (`architect`,
+`builder`, `spec-reviewer`, `disposition`), and **`forge-gate`** — the deterministic tier that
+scaffolds the spec, runs the nine invariants, refuses a ratification off a TTY, executes each task's
+`dod_tests` itself, checks a task's commit against its declared `scope`, and refuses to open the PR
+while any of that is missing. Nothing is "done" because an agent said so.
+
+It is the only mode whose prompt contract alters a rule that applies everywhere else, so the terms
+are explicit:
+
+- **Commits.** Only on a branch named **`forge/<slug>`**, only after `ratify` has landed and
+  `analyze` passes (`claim` refuses otherwise), and push/PR only through `forge-gate finish`. Never
+  `main`, never a tag, no amend, no force-push.
+- **Review.** Per task, the correctness lane on that task's diff; before the PR, both lanes plus
+  `disposition` on the whole branch. In a forge harness checkout the harness owns PR review, so the
+  session dispatches none.
+
+The gate is the coarse belt. OS-level confinement (gondolin's mounts) is the fine one, and the
 worktree plus the repo's git hooks remain the boundary that actually binds a commit.
 
 ## Overrides

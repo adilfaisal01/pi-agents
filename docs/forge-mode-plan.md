@@ -40,6 +40,12 @@ machinery denials here apply everywhere the package is installed.
 
 ## Status — implemented 2026-11-19
 
+> **Superseded in part, 2026-11-19.** The prompt contract this plan describes ("in a forge checkout
+> claim a bead; anywhere else state the change set and work") was replaced the same day: forge mode
+> now runs the intake pipeline everywhere — `specs/NNN-<slug>/`, Gate A, numbered tasks, per-task
+> review, PR. See [`forge-intake-pipeline-plan.md`](forge-intake-pipeline-plan.md). The mode's
+> mechanics below (config, `writeDeny`, `Ctrl+5`, `writeDenyReason`, selftest) still stand.
+
 Steps 1–6 landed, plus step 4b (the `writeDenyReason` fix the live probe surfaced). Verified:
 
 - `bash v-model-agents/modes/check.sh` → tsc clean, **52 assertions, all passed** (was 38).
