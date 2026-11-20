@@ -32,6 +32,21 @@
   everywhere else it presents the diff and waits. Review follows the same split — the harness owns
   it in a forge checkout, the two-model swarm runs automatically anywhere else. Selftest grew from
   38 to 52 assertions. Design and decisions: `docs/forge-mode-plan.md`.
+- **`forge` mode now runs the intake pipeline, and `forge-gate` is its deterministic tier.** The
+  mode's contract is no longer "state the change set and work" outside a harness checkout — it is
+  `objective → spec → Gate A (human) → numbered tasks → build each → review each → PR`, which is the
+  traceability the forge exists for. New in `forge/`: `templates/spec-template.md` (the pi render of
+  the spec + Task-Breakdown schema, nine invariants, normative) and `bin/forge-gate`
+  (`start · analyze · ratify · claim · build · review · complete · finish · report`, python3 stdlib,
+  no model, no network). The properties that carry the regulatory argument: `ratify` requires a TTY on
+  stdin **and** stdout, so an agent cannot produce the Gate-A row; `build` executes each task's
+  `dod_tests` selectors and records the exit code, so "green" is something the gate ran, not something
+  an agent said; `complete` refuses an unreviewed task, a latest review with open SEV1/SEV2, or a
+  commit that escaped the task's declared `scope` (its own `specs/NNN-<slug>/` audit paths exempt).
+  Commits are allowed only on a `forge/<slug>` branch, only after `ratify` + `analyze`, and push/PR
+  only via `forge-gate finish`. `forge/check-gate.sh` adds 36 adversarial fixtures (one per invariant,
+  plus every refusal) as a seventh `npm run check` suite. Deferred, stated in the plan: a per-dispatch
+  `scope` on `subagent` (LOCAL 7) — the gate enforces scope at completion today.
 - **A `subagent-models.json` template** (`forge/subagent-models.example.json`): a
   cross-provider map for the four dispatched forge roles, plus `forge/check-role-models.sh` — a
   sixth `npm run check` suite, no model call, `skip` rather than failure where `pi` is absent. It

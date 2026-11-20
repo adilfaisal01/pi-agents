@@ -137,11 +137,18 @@ the gate fires on a finished change either way.
 `forge/` carries the shinro-forge intake workflow on the package surface, so a pi session gets
 it without sitting inside a forge checkout:
 
+**The pipeline is the point:** `objective → spec → Gate A (human) → numbered tasks → build each →
+review each → one PR`, with an append-only `specs/NNN-<slug>/records.jsonl` beside it. `forge-gate`
+(`forge/bin/`, a `bin` entry) is the deterministic tier: it scaffolds the spec, runs the nine
+invariants, refuses a ratification off a TTY, executes each task's `dod_tests` itself, checks a
+task's commit against its declared `scope`, and refuses the PR while any of that is missing. Design:
+[`docs/forge-intake-pipeline-plan.md`](docs/forge-intake-pipeline-plan.md).
+
 - **Skills** (`forge/skills/`): `clarify` (the one-question-at-a-time loop that bounds
   *questions*, never coverage), `spec-authoring` (stories, FR-NNN, measurable SC-NNN),
   `decompose` (the machine-parseable Task Breakdown), `forge-review` (two-model PR review,
   bridged to the forge's machine-checkable record), `forge-workflow` (bead → worktree →
-  test-first → PR).
+  test-first → PR in a harness checkout).
 - **Role contracts** (`forge/agents/`, read by the `subagent` tool via `pi.agents`):
   `architect` (writes only under `specs/`, never ratifies), `builder` (only under `sandbox/`,
   never merges), and the read-only `spec-reviewer` and `disposition`.
@@ -184,6 +191,7 @@ bash code-review-swarm/scripts/selftest.sh   # frontmatter, lane contracts, both
 bash review-lanes/check.sh                   # syntax + lane self-test in a throwaway repo
 bash review-gate/check.sh                    # stub-lane suite: policy, exit codes, ledger, cross-file contracts
 bash forge/check-role-models.sh              # the role→model sample: keys match the shipped roles, ids resolve
+bash forge/check-gate.sh                     # 36 gate fixtures: nine invariants, ratify-off-a-TTY, scope escapes
 bash scripts/check-package.sh                # everything above, plus manifest and packed-tarball checks
 ```
 
