@@ -8,8 +8,8 @@ in `/mnt/E/github-projects/pi-agents-npm-release.md` (publish needs `--otp`).
 ## Read these before changing anything
 
 These two documents are harness knowledge, not repo knowledge, so they live in the
-platform vault (`/mnt/E/obsidian/shinro-platform/notes/`) and are pulled when
-needed rather than carried in this checkout:
+personal vault (`/mnt/E/obsidian/personal/notes/`) and are pulled when needed
+rather than carried in this checkout — `vault-personal` MCP or `rg`:
 
 - `pi-runtime-notes.md` — model config and the ollama-cloud sync, subagent
   frontmatter and model rules, the MCP adapter, the corpus servers, TUI probe
