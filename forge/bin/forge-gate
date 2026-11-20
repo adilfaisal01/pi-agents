@@ -8,7 +8,8 @@
     forge-gate build   <spec-dir> <T00N>     # runs dod_tests, records the result
     forge-gate review  <spec-dir> <T00N> --verdict V --findings N --open-sev12 N
     forge-gate complete <spec-dir> <T00N> --commit SHA
-    forge-gate finish  <spec-dir> [--draft]  # push the branch, open the PR
+    forge-gate finish  <spec-dir> [--draft]  # commit the trail, push, open the PR
+    forge-gate clean   <spec-dir> [--force]  # remove this spec's worktrees
     forge-gate report  <spec-dir>
 
 Why this exists: "traceable" has to mean *re-runnable by a third party*, not "an agent wrote a
@@ -27,6 +28,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -164,6 +166,86 @@ def scope_matches(path: str, glob: str) -> bool:
         return re.fullmatch("".join(out), path) is not None
     except re.error:  # a malformed class is a spec bug, not a crash
         return False
+
+
+
+# --- worktrees: the isolation tiers ------------------------------------------
+# One integration worktree per spec (branch `forge/<slug>`) and one task worktree per claim
+# (branch `forge/<slug>/<T00N>`, cut from the integration head). The repo checkout is never the
+# place a builder works, which is the forge harness's own rule: "the shared checkout is never
+# modified directly". Worktrees live beside the repo, not inside it, so `git status` in your
+# checkout stays quiet and a `rm -rf` of the worktree root cannot touch tracked files.
+
+
+def worktree_root(root: Path, slug: str) -> Path:
+    return root.parent / f"{root.name}.forge" / slug
+
+
+def worktrees() -> dict[str, str]:
+    """branch -> worktree path, from `git worktree list --porcelain`."""
+    out: dict[str, str] = {}
+    path = ""
+    for line in git("worktree", "list", "--porcelain").splitlines():
+        if line.startswith("worktree "):
+            path = line[len("worktree "):]
+        elif line.startswith("branch refs/heads/"):
+            out[line[len("branch refs/heads/"):]] = path
+    return out
+
+
+def branch_exists(branch: str) -> bool:
+    return subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+        capture_output=True,
+        text=True,
+    ).returncode == 0
+
+
+def add_worktree(path: Path, branch: str, create_branch_from: str | None) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if create_branch_from:
+        git("branch", branch, create_branch_from)
+    git("worktree", "add", str(path), branch)
+    print(f"worktree: {path} (branch {branch})")
+    return path
+
+
+def ensure_integration(root: Path, slug: str) -> Path:
+    """The integration worktree: branch `forge/<slug>`, created on demand from HEAD."""
+    branch = f"forge/{slug}"
+    existing = worktrees().get(branch)
+    if existing:
+        return Path(existing)
+    if not branch_exists(branch):
+        # Untracked files do not stop the branch: they are the spec being authored (and the audit
+        # trail is committed onto the branch at `finish`). Tracked changes do stop it — the branch
+        # must start from a tree someone chose.
+        root_clean = not git("status", "--porcelain", "--untracked-files=no")
+        if not root_clean:
+            raise Refused(
+                f"integration branch {branch} does not exist and the checkout is dirty; "
+                "commit or stash first so the branch starts from a known tree"
+            )
+        git("branch", branch, "HEAD")
+    return add_worktree(worktree_root(root, slug), branch, None)
+
+
+def task_worktree(d: Path, tid: str) -> tuple[Path, str]:
+    """The claimed worktree + branch for a task, from its latest claim row."""
+    rows = read_rows(d)
+    claims = [r for r in rows if r.get("event") == "task-claimed" and r.get("task") == tid]
+    if not claims:
+        raise Refused(f"{tid}: no claim row — run `forge-gate claim` first")
+    claim = claims[-1]
+    wt, branch = claim.get("worktree"), claim.get("task_branch")
+    if not wt or not branch:
+        raise Refused(
+            f"{tid}: its claim row predates worktree isolation (no `worktree`/`task_branch`); "
+            "re-claim the task"
+        )
+    if not Path(wt).is_dir():
+        raise Refused(f"{tid}: worktree {wt} is gone — re-claim the task")
+    return Path(wt), branch
 
 
 # --- analyze ----------------------------------------------------------------
@@ -531,19 +613,37 @@ def cmd_claim(args: argparse.Namespace) -> int:
     if errors:
         raise Refused("claim: the spec does not pass `analyze`")
     task = task_of(d, args.task)
+    root = Path(git("rev-parse", "--show-toplevel"))
     branch = f"forge/{d.name}"
+
     head = git("rev-parse", "--abbrev-ref", "HEAD")
-    if head != branch:
-        raise Refused(f"claim: HEAD is '{head}'; forge mode commits only on '{branch}' (git switch -c {branch})")
+    if head == branch:
+        raise Refused(
+            f"claim: this checkout IS '{branch}'. Work happens in worktrees — switch this checkout "
+            f"to a working branch (e.g. `git switch main`) and claim again."
+        )
+
     deps = task.get("depends_on") or []
     done = {r.get("task") for r in rows if r.get("event") == "task-complete"}
     for dep in deps:
         if dep not in done:
             raise Refused(f"claim: {args.task} depends on {dep}, which is not complete")
-    if any(r.get("event") == "task-claimed" and r.get("task") == args.task for r in rows) and not any(
-        r.get("event") == "task-complete" and r.get("task") == args.task for r in rows
-    ):
-        print(f"note: {args.task} was claimed before and is not complete; continuing")
+    if any(r.get("event") == "task-complete" and r.get("task") == args.task for r in rows):
+        raise Refused(f"claim: {args.task} is already complete")
+
+    integration = ensure_integration(root, d.name)
+    # NOT `forge/<slug>/<T00N>`: git refuses a ref under a name that is already a branch
+    # ("cannot lock ref … 'refs/heads/forge/001-x' exists"). Flatten it — still under `forge/`.
+    task_branch = f"{branch}-{args.task}"
+    existing = worktrees().get(task_branch)
+    if existing:
+        wt = Path(existing)
+        print(f"note: {args.task} was claimed before; reusing {wt}")
+    elif branch_exists(task_branch):
+        wt = add_worktree(worktree_root(root, d.name) / args.task, task_branch, None)
+    else:
+        wt = add_worktree(worktree_root(root, d.name) / args.task, task_branch, branch)
+
     append_row(
         d,
         {
@@ -552,9 +652,13 @@ def cmd_claim(args: argparse.Namespace) -> int:
             "who": args.who,
             "model": args.model or "inherited",
             "branch": branch,
+            "task_branch": task_branch,
+            "worktree": str(wt),
         },
     )
-    print(f"claimed {args.task} on {branch}")
+    print(f"claimed {args.task} on {task_branch}")
+    print(f"  integration: {integration}")
+    print(f"  work here:   {wt}")
     return 0
 
 
@@ -563,14 +667,12 @@ def cmd_build(args: argparse.Namespace) -> int:
     rows = read_rows(d)
     require_ratified(d, rows, "build")
     task = task_of(d, args.task)
-    if not any(r.get("event") == "task-claimed" and r.get("task") == args.task for r in rows):
-        raise Refused(f"build: {args.task} was never claimed")
-    root = Path(git("rev-parse", "--show-toplevel"))
+    wt, _task_branch = task_worktree(d, args.task)
     results = []
     for selector in task.get("dod_tests") or []:
         proc = subprocess.run(
             ["timeout", str(args.timeout), "bash", selector],
-            cwd=str(root),
+            cwd=str(wt),
             capture_output=True,
             text=True,
             stdin=subprocess.DEVNULL,
@@ -593,7 +695,7 @@ def cmd_build(args: argparse.Namespace) -> int:
             "green": green,
         },
     )
-    print(f"\n{args.task}: {'green' if green else 'red'} ({len(results)} selector(s))")
+    print(f"\n{args.task}: {'green' if green else 'red'} ({len(results)} selector(s)) in {wt}")
     return 0 if green else 1
 
 
@@ -639,10 +741,20 @@ def cmd_complete(args: argparse.Namespace) -> int:
             f"(latest review {latest.get('verdict')}, {latest.get('open_sev12')} open)"
         )
 
-    # the scope check: the task commit's diff must sit inside the task's declared scope —
-    # except for this spec's own directory, because the audit trail is meant to be committed
-    # with the work it describes. The exemption is the spec dir, not "any specs/ tree".
-    changed = [p for p in git("show", "--pretty=format:", "--name-only", args.commit).splitlines() if p]
+    wt, task_branch = task_worktree(d, args.task)
+    # the commit must be on the task's own branch — not a stray commit from somewhere else
+    on_branch = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", args.commit, task_branch],
+        cwd=str(wt),
+        capture_output=True,
+        text=True,
+    )
+    if on_branch.returncode != 0:
+        raise Refused(f"complete: {args.commit[:8]} is not on {task_branch}")
+
+    # the scope check: the commit's diff must sit inside the task's declared scope — except for
+    # this spec's own directory, because the audit trail is committed with the work it describes
+    changed = [p for p in git("show", "--pretty=format:", "--name-only", args.commit, cwd=wt).splitlines() if p]
     audit_prefix = f"specs/{d.name}/"
     exempt = [p for p in changed if p.startswith(audit_prefix)]
     outside = [
@@ -655,11 +767,40 @@ def cmd_complete(args: argparse.Namespace) -> int:
             f"complete: {args.task}'s commit {args.commit[:8]} touches paths outside its scope "
             f"{scope}: {', '.join(outside)}"
         )
+
+    # land it: fast-forward the integration branch onto the task branch, inside the integration
+    # worktree (so the repo checkout and its current branch are never touched)
+    branch = f"forge/{d.name}"
+    integration = worktrees().get(branch)
+    if not integration:
+        raise Refused(f"complete: no worktree is checked out on {branch}; re-run claim")
+    merge = subprocess.run(
+        ["git", "merge", "--ff-only", task_branch],
+        cwd=integration,
+        capture_output=True,
+        text=True,
+    )
+    if merge.returncode != 0:
+        raise Refused(
+            f"complete: {branch} cannot fast-forward onto {task_branch} "
+            f"({(merge.stderr or merge.stdout).strip()}) — the integration branch moved since this "
+            "task was claimed; re-claim the task from the current head"
+        )
+    merged = git("rev-parse", "HEAD", cwd=Path(integration))
+
     append_row(
         d,
-        {"event": "task-complete", "task": args.task, "commit": args.commit, "paths": changed},
+        {
+            "event": "task-complete",
+            "task": args.task,
+            "commit": args.commit,
+            "merged": merged,
+            "branch": branch,
+            "paths": changed,
+        },
     )
     print(f"complete: {args.task} ({len(changed)} path(s), all in scope)")
+    print(f"  merged into {branch} at {merged[:8]}")
     return 0
 
 
@@ -673,20 +814,63 @@ def cmd_finish(args: argparse.Namespace) -> int:
             print(f"  FAIL  {e}")
         raise Refused("finish: refusing to open a PR while the spec or its trail is incomplete")
     branch = f"forge/{d.name}"
-    head = git("rev-parse", "--abbrev-ref", "HEAD")
-    if head != branch:
-        raise Refused(f"finish: HEAD is '{head}', expected '{branch}'")
-    git("push", "-u", "origin", branch)
+    integration = worktrees().get(branch)
+    if not integration:
+        raise Refused(f"finish: no worktree is checked out on {branch}")
+    iwt = Path(integration)
+
+    # the trail travels with the branch: copy specs/<slug>/ into the integration worktree and
+    # commit it as a gate-authored commit, so the PR contains the audit artifact, not just code
+    src = d
+    dst = iwt / "specs" / d.name
+    if dst.exists():
+        shutil.rmtree(dst)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dst)
+    git("add", f"specs/{d.name}", cwd=iwt)
+    if git("status", "--porcelain", cwd=iwt):
+        git("-c", "user.name=forge-gate", "-c", "user.email=forge-gate@localhost",
+            "commit", "-m", f"audit: specs/{d.name} (spec + trail)", cwd=iwt)
+        print(f"committed the audit trail on {branch}")
+    else:
+        print("audit trail already up to date on the branch")
+
+    git("push", "-u", "origin", branch, cwd=iwt)
     body = render_report(d, rows)
     cmd = ["gh", "pr", "create", "--head", branch, "--title", f"forge: {d.name}", "--body", body]
     if args.draft:
         cmd.append("--draft")
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=str(iwt))
     if proc.returncode != 0:
         raise Refused(f"finish: gh pr create failed: {(proc.stderr or proc.stdout).strip()}")
     url = (proc.stdout.strip().splitlines() or [""])[-1]
     append_row(d, {"event": "pr-opened", "branch": branch, "url": url, "who": args.who})
     print(f"pushed {branch} and opened {url}")
+    return 0
+
+
+def cmd_clean(args: argparse.Namespace) -> int:
+    d, _ = spec_paths(args.spec_dir)
+    root = Path(git("rev-parse", "--show-toplevel"))
+    branch = f"forge/{d.name}"
+    targets = [
+        (b, p) for b, p in worktrees().items() if b == branch or b.startswith(f"{branch}-")
+    ]
+    if not targets:
+        print(f"clean: no worktrees for {d.name}")
+        return 0
+    dirty = [p for _b, p in targets if git("status", "--porcelain", cwd=Path(p))]
+    if dirty and not args.force:
+        for p in dirty:
+            print(f"  dirty  {p}")
+        raise Refused(
+            "clean: a worktree has uncommitted changes — finish or discard them, "
+            "or re-run with --force to remove anyway"
+        )
+    for _b, path in targets:
+        git("worktree", "remove", "--force", path)
+        print(f"removed {path}")
+    git("worktree", "prune", check=False)
     return 0
 
 
@@ -778,6 +962,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--draft", action="store_true")
     p.add_argument("--who", default="agent:dispatcher")
     p.set_defaults(func=cmd_finish)
+
+    p = sub.add_parser("clean", help="remove this spec's worktrees")
+    p.add_argument("spec_dir")
+    p.add_argument("--force", action="store_true", help="remove even a dirty worktree")
+    p.set_defaults(func=cmd_clean)
 
     p = sub.add_parser("report", help="print the audit trail")
     p.add_argument("spec_dir")

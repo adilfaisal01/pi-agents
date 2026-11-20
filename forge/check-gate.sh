@@ -59,7 +59,6 @@ chmod +x tests/run.sh
 printf 'value = 1\n' >src/app.py
 git add -A
 git commit -qm init
-git switch -qc forge/001-fixture
 
 echo "== scaffold =="
 if "$GATE" start fixture --objective "fixture objective" >/dev/null 2>&1 &&
@@ -235,7 +234,7 @@ echo
 echo "== the trail drives completion =="
 # A real ratification through a pty: this is the one row an agent cannot write.
 printf '# understanding\n\n## What the FRs will build\n\nthe thing\n' >specs/001-fixture/understanding.md
-python3 - "$GATE" <<'PY'
+python3 - "$GATE" <<'PY_RATIFY'
 import os, pty, select, sys, time
 gate = sys.argv[1]
 pid, fd = pty.fork()
@@ -265,32 +264,51 @@ except OSError:
     pass
 os.waitpid(pid, 0)
 sys.exit(0 if b"ratified" in out else 1)
-PY
+PY_RATIFY
 if [ $? -eq 0 ] && grep -q '"event": "ratified"' specs/001-fixture/records.jsonl; then
 	ok "a human at a TTY ratifies and the row lands"
 else
 	bad "a human at a TTY ratifies and the row lands"
 fi
 
-# claim: requires the branch guard, an acceptable spec and ratification.
+# claim: requires the branch guard, an acceptable spec, ratification and a complete dependency.
 out=$("$GATE" claim specs/001-fixture T002 2>&1)
 if [ $? -eq 1 ] && printf '%s' "$out" | grep -qF 'depends on T001'; then
 	ok "claim refuses a task whose dependency is incomplete"
 else
 	bad "claim refuses a task whose dependency is incomplete"
 fi
+
 "$GATE" claim specs/001-fixture T001 --model test/model >/dev/null 2>&1
 if [ $? -eq 0 ]; then ok "claim succeeds on the guarded branch"; else bad "claim succeeds on the guarded branch"; fi
 
-# build: dod_tests are executed by the gate, not trusted from the model.
+# --- worktree isolation ---------------------------------------------------
+INTEG="$WORK/repo.forge/001-fixture"
+TASK="$INTEG/T001"
+if [ -d "$TASK" ] && [ "$(git -C "$TASK" rev-parse --abbrev-ref HEAD)" = "forge/001-fixture-T001" ]; then
+	ok "claim created a task worktree on its own branch, outside the checkout"
+else
+	bad "claim created a task worktree on its own branch, outside the checkout"
+fi
+if [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] && git worktree list --porcelain | grep -q "branch refs/heads/forge/001-fixture$"; then
+	ok "the repo checkout stays on main; the integration branch lives in its own worktree"
+else
+	bad "the repo checkout stays on main; the integration branch lives in its own worktree"
+fi
+if git -C "$TASK" status --porcelain | grep -q .; then
+	bad "the task worktree starts clean"
+else
+	ok "the task worktree starts clean"
+fi
+
+# build: dod_tests are executed by the gate, inside the task worktree.
 "$GATE" build specs/001-fixture T001 >/dev/null 2>&1
 if [ $? -eq 0 ] && grep -q '"green": true' specs/001-fixture/records.jsonl; then
 	ok "build runs dod_tests and records green"
 else
 	bad "build runs dod_tests and records green"
 fi
-# a red selector records red and exits 1
-printf '#!/usr/bin/env bash\nexit 3\n' >tests/broken.sh && chmod +x tests/broken.sh
+printf '#!/usr/bin/env bash\nexit 3\n' >"$TASK/tests/broken.sh" && chmod +x "$TASK/tests/broken.sh"
 write_spec red-selector
 "$GATE" build specs/001-fixture T001 >/dev/null 2>&1
 if [ $? -eq 1 ] && grep -q '"green": false' specs/001-fixture/records.jsonl; then
@@ -298,17 +316,15 @@ if [ $? -eq 1 ] && grep -q '"green": false' specs/001-fixture/records.jsonl; the
 else
 	bad "build records red when a selector fails"
 fi
-# restore the green selector
+rm -f "$TASK/tests/broken.sh"
 write_spec ok
-"$GATE" claim specs/001-fixture T001 >/dev/null 2>&1 || true
-"$GATE" build specs/001-fixture T001 >/dev/null 2>&1 || true
+"$GATE" build specs/001-fixture T001 >/dev/null 2>&1
 
-# complete: refuses without a review, then refuses an out-of-scope commit, then accepts.
-rm -f tests/broken.sh          # fixture artifact from the red-build case; not part of T001
-printf 'value = 2\n' >src/app.py
-git add -A >/dev/null 2>&1
-git commit -qm "T001 inside scope"
-INSIDE=$(git rev-parse HEAD)
+# complete: refuses without a review, then with open SEV1/2, then accepts and merges.
+printf 'value = 2\n' >"$TASK/src/app.py"
+git -C "$TASK" add -A >/dev/null 2>&1
+git -C "$TASK" commit -qm "T001 inside scope"
+INSIDE=$(git -C "$TASK" rev-parse HEAD)
 out=$("$GATE" complete specs/001-fixture T001 --commit "$INSIDE" 2>&1)
 if [ $? -eq 1 ] && printf '%s' "$out" | grep -qF 'never reviewed'; then
 	ok "complete refuses a task that was never reviewed"
@@ -325,12 +341,19 @@ fi
 "$GATE" review specs/001-fixture T001 --verdict CLEAN --findings 0 --open-sev12 0 >/dev/null 2>&1
 "$GATE" complete specs/001-fixture T001 --commit "$INSIDE" >/dev/null 2>&1
 if [ $? -eq 0 ]; then ok "complete accepts an in-scope, reviewed, green task"; else bad "complete accepts an in-scope, reviewed, green task"; fi
+if [ "$(git -C "$INTEG" rev-parse HEAD)" = "$INSIDE" ]; then
+	ok "complete fast-forwards the integration branch onto the task branch"
+else
+	bad "complete fast-forwards the integration branch onto the task branch"
+fi
 
-printf 'x\n' >docs-outside.txt && mkdir -p docs && mv docs-outside.txt docs/x.txt
-git add -A >/dev/null 2>&1
-git commit -qm "T001 escapes scope"
-OUTSIDE=$(git rev-parse HEAD)
-"$GATE" claim specs/001-fixture T002 >/dev/null 2>&1 || true
+# a commit on the task branch that escapes the declared scope
+"$GATE" claim specs/001-fixture T002 >/dev/null 2>&1
+TASK2="$INTEG/T002"
+mkdir -p "$TASK2/docs" && printf 'x\n' >"$TASK2/docs/x.txt"
+git -C "$TASK2" add -A >/dev/null 2>&1
+git -C "$TASK2" commit -qm "T002 escapes scope"
+OUTSIDE=$(git -C "$TASK2" rev-parse HEAD)
 "$GATE" build specs/001-fixture T002 >/dev/null 2>&1 || true
 "$GATE" review specs/001-fixture T002 --verdict CLEAN --findings 0 --open-sev12 0 >/dev/null 2>&1
 out=$("$GATE" complete specs/001-fixture T002 --commit "$OUTSIDE" 2>&1)
@@ -346,6 +369,20 @@ if [ $? -eq 1 ] && printf '%s' "$out" | grep -qF 'refusing to open a PR'; then
 	ok "finish refuses an incomplete trail"
 else
 	bad "finish refuses an incomplete trail"
+fi
+
+# clean: refuses a dirty worktree, then removes them all with --force.
+out=$("$GATE" clean specs/001-fixture 2>&1)
+if [ $? -eq 1 ] && printf '%s' "$out" | grep -qF 'uncommitted changes'; then
+	ok "clean refuses a dirty worktree"
+else
+	bad "clean refuses a dirty worktree"
+fi
+"$GATE" clean specs/001-fixture --force >/dev/null 2>&1
+if [ ! -d "$TASK" ] && [ ! -d "$INTEG" ]; then
+	ok "clean --force removes the spec's worktrees"
+else
+	bad "clean --force removes the spec's worktrees"
 fi
 
 echo

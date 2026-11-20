@@ -32,6 +32,18 @@
   everywhere else it presents the diff and waits. Review follows the same split — the harness owns
   it in a forge checkout, the two-model swarm runs automatically anywhere else. Selftest grew from
   38 to 52 assertions. Design and decisions: `docs/forge-mode-plan.md`.
+- **Worktree isolation per task, in any repo.** `forge-gate claim` now creates two worktrees beside
+  the checkout — `<repo>.forge/<slug>/` on `forge/<slug>` (the integration branch, i.e. the PR) and
+  `<repo>.forge/<slug>/<T00N>/` on `forge/<slug>-<T00N>` (where the builder works) — so the forge
+  harness's rule, "the shared checkout is never modified directly", holds without the harness.
+  `build` executes the `dod_tests` in the task worktree; `complete` fast-forwards the integration
+  branch onto the task branch (and refuses if it moved since the claim); `finish` copies
+  `specs/NNN-<slug>/` onto the branch as a gate-authored `audit:` commit, so the PR carries the spec
+  and the trail; new `forge-gate clean [--force]` removes the worktrees and refuses a dirty one. The
+  task branch is `forge/<slug>-<T00N>` and not `forge/<slug>/<T00N>` because git refuses a ref under a
+  name that is already a branch. `check-gate.sh` grew to 46 fixtures: the worktrees exist where the
+  claim says, the checkout stays on its own branch, a dirty worktree blocks `clean`, and `complete`
+  refuses a commit that is not on the task branch.
 - **`forge` mode now runs the intake pipeline, and `forge-gate` is its deterministic tier.** The
   mode's contract is no longer "state the change set and work" outside a harness checkout — it is
   `objective → spec → Gate A (human) → numbered tasks → build each → review each → PR`, which is the

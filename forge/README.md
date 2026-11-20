@@ -39,16 +39,39 @@ each arrow checkable:
 | author | (skills: `spec-authoring`, `clarify`) | — the post-condition is zero `[NEEDS CLARIFICATION]` markers |
 | Gate B | `forge-gate analyze <spec>` | any of the nine invariants, FR↔task traceability, a dangling `satisfies` |
 | Gate A | `forge-gate ratify <spec>` | **off a TTY** (an agent cannot ratify), a missing `understanding.md`, a spec that fails `analyze` |
-| claim | `forge-gate claim <spec> T00N` | unratified spec, a branch that is not `forge/<slug>`, an incomplete `depends_on` |
+| claim | `forge-gate claim <spec> T00N` | unratified spec, a failing `analyze`, an incomplete `depends_on`, a checkout sitting on the integration branch |
 | build | `forge-gate build <spec> T00N` | nothing — it *runs* the `dod_tests` selectors and records green/red itself |
 | review | `forge-gate review <spec> T00N --verdict … --open-sev12 N` | nothing; it records what the lanes said |
-| complete | `forge-gate complete <spec> T00N --commit SHA` | no green build, no review, open SEV1/SEV2, a commit that escaped the task's `scope` |
+| complete | `forge-gate complete <spec> T00N --commit SHA` | no green build, no review, open SEV1/SEV2, a commit that escaped the task's `scope`, an integration branch that cannot fast-forward |
 | finish | `forge-gate finish <spec>` | an incomplete task, a failing `analyze --strict`, a missing trail row |
+| clean | `forge-gate clean <spec> [--force]` | a dirty worktree, without `--force` |
 | audit | `forge-gate report <spec>` | a `records.jsonl` line that is not one JSON object per line |
 
 `specs/NNN-<slug>/` holds `spec.md`, `understanding.md`, `restatement.md`, `records.jsonl` and
-`evidence/`. The trail is committed with the work it describes — `complete` exempts that one
-directory from the task's scope check, and nothing else.
+`evidence/`. The trail is committed with the work it describes: `finish` copies it onto the PR branch
+as a gate-authored commit, so the PR carries the spec and the trail itself.
+
+### Isolation: a worktree per task, never the user's checkout
+
+`claim` creates two git worktrees beside the repo — the forge harness's own rule ("the shared
+checkout is never modified directly") applied to a repo without the harness:
+
+```text
+<repo>.forge/<slug>/           integration worktree · branch forge/<slug>      ← the PR branch
+<repo>.forge/<slug>/<T00N>/    task worktree        · branch forge/<slug>-<T00N> ← where a builder works
+```
+
+- The task branch is cut from the integration head, so `T002` physically contains `T001`'s code;
+  `claim` refuses a task whose `depends_on` is incomplete, so the order is enforced twice.
+- `build` runs the `dod_tests` **in the task worktree**; `complete` fast-forwards the integration
+  branch onto the task branch, and refuses if the integration branch moved since the claim.
+- Task branches are `forge/<slug>-<T00N>`, **not** `forge/<slug>/<T00N>`: git refuses a ref under a
+  name that is already a branch (`cannot lock ref … 'refs/heads/forge/001-x' exists`).
+- `clean` removes both, refusing a dirty one unless `--force`; `git worktree list` shows where the
+  isolation actually is, which is also what a reviewer can check.
+- The user's checkout stays on its own branch with only the untracked `specs/` while the run is in
+  flight. Worktree creation refuses a *tracked* change in the checkout (the branch must start from a
+  tree someone chose) and ignores untracked files (the spec being authored).
 
 Two properties worth stating plainly, because they are the whole regulatory argument:
 

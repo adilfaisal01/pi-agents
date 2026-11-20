@@ -43,29 +43,41 @@ plainly that the run is waived, not governed.
 
 ### 3. Tasks, one at a time
 
-Work the breakdown in dependency order. Per task:
+Work the breakdown in dependency order. **You never work in the user's checkout.** `claim` creates
+two git worktrees beside the repo and tells you where they are:
 
-```bash
-forge-gate claim   specs/NNN-<slug> T00N         # refuses unratified, or a branch that is not forge/<slug>
-git switch -c forge/<slug>                       # the only branch you may commit to
+```text
+<repo>.forge/<slug>/            integration worktree, branch forge/<slug>      ← the PR branch
+<repo>.forge/<slug>/<T00N>/     task worktree, branch forge/<slug>-<T00N>       ← where the builder works
 ```
 
-Dispatch the **`builder`** agent for the task (`subagent`, single mode), giving it: the task's
-`title`, `definition_of_done`, `scope` and `dod_tests` verbatim, and the instruction to write the
-failing test first. The builder must not write outside the task's `scope` — `forge-gate complete`
-checks its commit against that scope afterwards and refuses the task if it escaped.
+```bash
+forge-gate claim specs/NNN-<slug> T00N    # refuses: unratified · failing analyze · incomplete depends_on
+                                          #          · this checkout checked out on the integration branch
+```
 
-Then record the proof, and complete the task:
+Dispatch the **`builder`** agent for the task (`subagent`, single mode) with **`cwd` set to the task
+worktree `claim` printed**, giving it the task's `title`, `definition_of_done`, `scope` and
+`dod_tests` verbatim, and the instruction to write the failing test first. The builder must not write
+outside the task's `scope` — `forge-gate complete` checks its commit against that scope and refuses
+the task if it escaped.
+
+Then record the proof from the task worktree, and complete the task:
 
 ```bash
-forge-gate build    specs/NNN-<slug> T00N        # runs the dod_tests itself; green or red, not your word
+forge-gate build    specs/NNN-<slug> T00N        # runs the dod_tests in the task worktree; green or red
 forge-gate review   specs/NNN-<slug> T00N --verdict … --findings N --open-sev12 N
 forge-gate complete specs/NNN-<slug> T00N --commit <sha>
 ```
 
-`build` executes the selectors, so a claim of green is only as good as the exit code. `complete`
-refuses a task that is unreviewed, whose latest review still has open SEV1/SEV2, or whose commit
-left the task's scope. One task → one commit, message `T00N: <title>`.
+`build` executes the selectors in that worktree, so a claim of green is only as good as the exit
+code. `complete` refuses a task that is unreviewed, whose latest review still has open SEV1/SEV2, or
+whose commit left the task's scope — and then **fast-forwards the integration branch onto the task
+branch**, so tasks land in dependency order and the PR branch only ever moves forward. One task →
+one commit on the task branch, message `T00N: <title>`.
+
+The spec and the trail live in the user's checkout (`specs/NNN-<slug>/`); nothing you do in a
+worktree touches them.
 
 **Review per task** is the correctness lane (`review-correctness`) on that task's diff. Fix SEV1 and
 SEV2 before completing; SEV3/SEV4 are recorded and carried.
@@ -89,7 +101,9 @@ what was asked, what was built, and what the reviews said — not your recollect
 The standing rule is that nothing is committed or pushed without an explicit go. In this mode the
 exception is narrow and mechanical:
 
-- **only on a branch named `forge/<slug>`** — never `main`, never another branch, never a tag;
+- **only in the worktrees `forge-gate claim` created**, on the branch it put you on (`forge/<slug>`
+  for the integration worktree, `forge/<slug>-<T00N>` for a task) — never `main`, never another
+  branch, never a tag, and never in the user's checkout;
 - **only after** `ratify` has landed and `analyze` passes; `claim` refuses otherwise;
 - **push and PR only through `forge-gate finish`** — not by hand.
 

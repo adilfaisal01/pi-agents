@@ -43,7 +43,32 @@ ratification, claim with an incomplete dependency, a red build, an unreviewed co
 SEV1/SEV2, a scope escape, `finish` on an incomplete trail, and a malformed `records.jsonl` line.
 `bash scripts/check-package.sh` → seven suites green.
 
-**Deferred, deliberately:** LOCAL 7 (`scope` per dispatch on `subagent`). Without it a builder is not
+### Follow-on: worktree isolation (2026-11-19, same day)
+
+`claim` is now the isolation point, per the user: the architect and the spec are written in the repo
+checkout, then each claimed task is worked in its own git worktree, "similarly to the forge".
+
+- `<repo>.forge/<slug>/` — integration worktree on `forge/<slug>` (the PR branch).
+- `<repo>.forge/<slug>/<T00N>/` — task worktree on `forge/<slug>-<T00N>`, cut from the integration head.
+- `build` runs the selectors in the task worktree; `complete` fast-forwards the integration branch and
+  refuses if it moved since the claim; `finish` copies `specs/<slug>/` onto the branch as a
+  gate-authored `audit:` commit (so the PR carries the trail); new `clean [--force]` removes the
+  worktrees and refuses a dirty one.
+- Naming: `forge/<slug>-<T00N>`, not `forge/<slug>/<T00N>` — git refuses a ref under a name that is
+  already a branch (`cannot lock ref … 'refs/heads/forge/001-x' exists`). Found by the fixtures, not by
+  reading.
+- Worktree creation refuses a *tracked* change in the checkout (the branch must start from a chosen
+  tree) and ignores untracked files (the spec being authored).
+
+Verified: 46 gate fixtures, including the worktrees existing where the claim says, the checkout
+staying on its own branch, `clean` refusing a dirty worktree, and `complete` refusing a commit that is
+not on the task branch. Live end-to-end in a throwaway repo: `start → analyze → pty ratify → claim →
+build → review → complete` fast-forwarded `forge/001-slugify` to the task commit with the checkout
+untouched on `main`; against a local bare remote, `finish` created `audit: specs/001-slugify (spec +
+trail)` (spec + understanding + records), pushed it, and refused only at `gh pr create` (no GitHub
+remote) — the one step not proven end-to-end.
+
+**Still deferred:** LOCAL 7 (`scope` per dispatch on `subagent`). Without it a builder is not
 stopped from writing outside its task's scope *during* the run — it is caught at `complete`, which
 refuses the task and names the paths. That is later and coarser than a dispatch-time guard, but it is
 the same mechanical check, and delaying it kept this change set reviewable.

@@ -68,9 +68,10 @@ while any of that is missing. Nothing is "done" because an agent said so.
 It is the only mode whose prompt contract alters a rule that applies everywhere else, so the terms
 are explicit:
 
-- **Commits.** Only on a branch named **`forge/<slug>`**, only after `ratify` has landed and
-  `analyze` passes (`claim` refuses otherwise), and push/PR only through `forge-gate finish`. Never
-  `main`, never a tag, no amend, no force-push.
+- **Commits.** Only in the worktrees **`forge-gate claim` creates** (`<repo>.forge/<slug>/` on
+  `forge/<slug>`, and `<repo>.forge/<slug>/<T00N>/` on `forge/<slug>-<T00N>`), only after `ratify`
+  has landed and `analyze` passes, and push/PR only through `forge-gate finish`. The user's checkout
+  is never the place work happens. Never `main`, never a tag, no amend, no force-push.
 - **Review.** Per task, the correctness lane on that task's diff; before the PR, both lanes plus
   `disposition` on the whole branch. In a forge harness checkout the harness owns PR review, so the
   session dispatches none.
