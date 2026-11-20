@@ -1,24 +1,66 @@
-# forge — the shinro-forge architect workflow, as a pi package surface
+# forge — spec-first work with an audit trail, as a pi package surface
 
-Four skills and five role contracts from the
-[shinro-forge](https://github.com/Shinro-xyz/shinro-forge) harness, re-authored for pi so the
-intake workflow is available from any pi session — not only one whose working directory
-happens to reach a forge checkout.
+The [shinro-forge](https://github.com/Shinro-xyz/shinro-forge) intake workflow, re-authored for pi so
+it works in **any** repo — not only one whose working directory reaches a forge checkout. The point
+is traceability: every decision, build, review and sign-off lands in an append-only trail that a third
+party can re-read and re-check without asking the agent anything.
 
 ```text
 forge/
+├── bin/forge-gate                the deterministic tier: start · analyze · ratify · claim · build
+│                                 · review · complete · finish · report
+├── templates/spec-template.md    the spec + Task-Breakdown schema, normative (nine invariants)
 ├── skills/
 │   ├── clarify/SKILL.md          the one-question-at-a-time ambiguity loop
 │   ├── spec-authoring/SKILL.md   stories, FR-NNN, measurable SC-NNN
 │   ├── decompose/SKILL.md        the machine-parseable Task Breakdown
 │   ├── forge-review/SKILL.md     two-model PR review → the forge's machine-checkable record
-│   └── forge-workflow/SKILL.md   bead → worktree → test-first → PR
-└── agents/
-    ├── architect.md              writes only under specs/**; never mints beads, never ratifies
-    ├── builder.md                writes only under sandbox/**; opens a PR, never merges
-    ├── spec-reviewer.md          read-only, advisory Gate-A review of a draft spec
-    └── disposition.md            read-only adjudication of the merged review's findings
+│   └── forge-workflow/SKILL.md   bead → worktree → test-first → PR (harness repos)
+├── agents/
+│   ├── architect.md              writes only under specs/**; never mints beads, never ratifies
+│   ├── builder.md                writes only under sandbox/**; opens a PR, never merges
+│   ├── spec-reviewer.md          read-only, advisory Gate-A review of a draft spec
+│   └── disposition.md            read-only adjudication of the merged review's findings
+└── check-gate.sh                 36 adversarial fixtures: nine invariants + every trail refusal
 ```
+
+## The pipeline
+
+```text
+objective → spec → Gate A (human) → numbered tasks → build each → review each → PR
+```
+
+`forge` **mode** (`v-model-agents/modes`, `Ctrl+5` / `/mode forge`) drives it. The gate is what makes
+each arrow checkable:
+
+| step | command | what it refuses |
+| --- | --- | --- |
+| scaffold | `forge-gate start <slug>` | an existing spec dir; a slug with no usable characters |
+| author | (skills: `spec-authoring`, `clarify`) | — the post-condition is zero `[NEEDS CLARIFICATION]` markers |
+| Gate B | `forge-gate analyze <spec>` | any of the nine invariants, FR↔task traceability, a dangling `satisfies` |
+| Gate A | `forge-gate ratify <spec>` | **off a TTY** (an agent cannot ratify), a missing `understanding.md`, a spec that fails `analyze` |
+| claim | `forge-gate claim <spec> T00N` | unratified spec, a branch that is not `forge/<slug>`, an incomplete `depends_on` |
+| build | `forge-gate build <spec> T00N` | nothing — it *runs* the `dod_tests` selectors and records green/red itself |
+| review | `forge-gate review <spec> T00N --verdict … --open-sev12 N` | nothing; it records what the lanes said |
+| complete | `forge-gate complete <spec> T00N --commit SHA` | no green build, no review, open SEV1/SEV2, a commit that escaped the task's `scope` |
+| finish | `forge-gate finish <spec>` | an incomplete task, a failing `analyze --strict`, a missing trail row |
+| audit | `forge-gate report <spec>` | a `records.jsonl` line that is not one JSON object per line |
+
+`specs/NNN-<slug>/` holds `spec.md`, `understanding.md`, `restatement.md`, `records.jsonl` and
+`evidence/`. The trail is committed with the work it describes — `complete` exempts that one
+directory from the task's scope check, and nothing else.
+
+Two properties worth stating plainly, because they are the whole regulatory argument:
+
+- **A human ratifies, an agent cannot.** `ratify` requires a TTY on stdin *and* stdout, so the row
+  in the trail can only come from a person at a terminal.
+- **Green means the gate ran it.** `build` executes each `dod_tests` selector (`timeout … bash
+  <selector>`) and records the exit code; `complete` reads that row. An agent saying "tests pass" is
+  not a state the gate can be in.
+
+`forge-gate` is python3 stdlib, no network, no model — `bin/` entry, so `npx … forge-gate` works from
+an install. Schema and invariants: [`templates/spec-template.md`](templates/spec-template.md);
+fixtures: `forge/check-gate.sh` (part of `npm run check`).
 
 ## Why there is no `reviewer` here
 

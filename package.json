@@ -30,7 +30,8 @@
   },
   "bin": {
     "swarm-gate": "review-gate/bin/swarm-gate",
-    "review-lanes": "review-lanes/bin/review-lanes"
+    "review-lanes": "review-lanes/bin/review-lanes",
+    "forge-gate": "forge/bin/forge-gate"
   },
   "pi": {
     "extensions": [
@@ -74,6 +75,9 @@
     "code-review-swarm/README.md",
     "forge/skills",
     "forge/agents",
+    "forge/templates",
+    "forge/bin",
+    "forge/check-gate.sh",
     "forge/README.md",
     "forge/subagent-models.example.json",
     "forge/check-role-models.sh",

@@ -1,0 +1,795 @@
+#!/usr/bin/env python3
+"""forge-gate — the deterministic tier under forge mode's audit trail.
+
+    forge-gate start   <slug> [--objective TEXT] [--repo NAME]
+    forge-gate analyze <spec-dir> [--strict] [--json]
+    forge-gate ratify  <spec-dir>            # TTY-gated; a human, never an agent
+    forge-gate claim   <spec-dir> <T00N>
+    forge-gate build   <spec-dir> <T00N>     # runs dod_tests, records the result
+    forge-gate review  <spec-dir> <T00N> --verdict V --findings N --open-sev12 N
+    forge-gate complete <spec-dir> <T00N> --commit SHA
+    forge-gate finish  <spec-dir> [--draft]  # push the branch, open the PR
+    forge-gate report  <spec-dir>
+
+Why this exists: "traceable" has to mean *re-runnable by a third party*, not "an agent wrote a
+nice summary". So every gate here is string arithmetic over committed files — no model, no
+network, no judgment. `analyze` validates the spec's Task Breakdown against the nine invariants
+the template declares normative; the other verbs append rows to `records.jsonl` and refuse when
+the row they need is missing. Nothing is "done" because an agent said so.
+
+Exit codes: 0 ok · 1 a check failed / a gate refused · 2 usage or environment.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+# --- constants pinned to the template (they must never diverge from it) ------
+
+TASKS_BEGIN = "<!-- shinro:tasks:begin"
+TASKS_END = "<!-- shinro:tasks:end"
+TASK_ID = re.compile(r"^T[0-9]{3}$")
+FR_ID = re.compile(r"\bFR-[0-9]{3}\b")
+US_ID = re.compile(r"\bUS[0-9]+\b")
+PRIORITIES = {"P1", "P2", "P3"}
+REQUIRED_KEYS = (
+    "id",
+    "title",
+    "satisfies",
+    "priority",
+    "depends_on",
+    "target_repo",
+    "definition_of_done",
+    "success_criteria",
+    "scope",
+    "dod_tests",
+    "sc_evidence",
+)
+SCOPE_ALLOWED = re.compile(r"^[A-Za-z0-9._*?\[\]/-]+$")
+SELECTOR = re.compile(r"^(tests|sandbox)(/[A-Za-z0-9][A-Za-z0-9._-]*)+$")
+EVIDENCE_PATH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+VACUOUS_GLOB = re.compile(r"^([*?/]|\[[^]]*\])+$")
+RECORDS = "records.jsonl"
+UNDERSTANDING = "understanding.md"
+SPEC = "spec.md"
+
+
+class Refused(Exception):
+    """A gate said no. Message is printed verbatim; exit 1."""
+
+
+# --- small helpers ----------------------------------------------------------
+
+
+def now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def git(*args: str, cwd: Path | None = None, check: bool = True) -> str:
+    proc = subprocess.run(
+        ["git", *args], cwd=str(cwd) if cwd else None, capture_output=True, text=True
+    )
+    if check and proc.returncode != 0:
+        raise Refused(f"git {' '.join(args)} failed: {proc.stderr.strip() or proc.stdout.strip()}")
+    return proc.stdout.strip()
+
+
+def git_user() -> str:
+    try:
+        return f"human:{git('config', 'user.name', check=False) or 'unknown'}"
+    except Exception:  # noqa: BLE001 - identity is decoration, not a gate
+        return "human:unknown"
+
+
+def spec_paths(spec_dir: str) -> tuple[Path, Path]:
+    d = Path(spec_dir).resolve()
+    if not (d / SPEC).is_file():
+        raise Refused(f"{spec_dir}: no {SPEC} (run `forge-gate start <slug>` first)")
+    return d, d / RECORDS
+
+
+def append_row(d: Path, row: dict) -> None:
+    row = {"ts": now(), **row}
+    with (d / RECORDS).open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(row, sort_keys=True) + "\n")
+
+
+def read_rows(d: Path) -> list[dict]:
+    f = d / RECORDS
+    if not f.is_file():
+        return []
+    rows = []
+    for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise Refused(f"{RECORDS}:{n}: not one JSON object per line ({exc.msg})")
+        if not isinstance(obj, dict) or "event" not in obj:
+            raise Refused(f"{RECORDS}:{n}: every row needs at least an `event`")
+        rows.append(obj)
+    return rows
+
+
+def task_block(text: str) -> dict:
+    """Slice the one sentinel-bounded JSON block and parse it."""
+    if text.count(TASKS_BEGIN) != 1 or text.count(TASKS_END) != 1:
+        raise Refused(
+            f"{SPEC}: expected exactly one task block ({TASKS_BEGIN} … {TASKS_END}); "
+            f"found {text.count(TASKS_BEGIN)} begin / {text.count(TASKS_END)} end"
+        )
+    body = text.split(TASKS_BEGIN, 1)[1].split(TASKS_END, 1)[0]
+    # the sentinel's own tail (` v1 -->`) is not content
+    if "-->" in body:
+        body = body.split("-->", 1)[1]
+    # drop the ``` fences and their language tag, keep everything else
+    lines = [ln for ln in body.splitlines() if not ln.strip().startswith("```")]
+    raw = "\n".join(lines).strip()
+    if not raw:
+        raise Refused(f"{SPEC}: the task block is empty")
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise Refused(f"{SPEC}: the task block is not valid JSON ({exc.msg})")
+
+
+def scope_matches(path: str, glob: str) -> bool:
+    """POSIX case-pattern match, pinned to the template's semantics.
+
+    `*` and `**` both cross `/`; `?` is one char; `[..]` classes work; no dotfile
+    special-casing. `dir/**` does not match `dir` itself.
+    """
+    pattern = glob.replace("*", "\x00")  # sentinel: `*` becomes `.*`
+    out = []
+    for ch in pattern:
+        if ch == "\x00":
+            out.append(".*")
+        elif ch == "?":
+            out.append(".")
+        elif ch in ".[]{}()+-^$|\\":
+            out.append(ch if ch in "[]()+-^$|." else "\\" + ch)
+        else:
+            out.append(re.escape(ch))
+    try:
+        return re.fullmatch("".join(out), path) is not None
+    except re.error:  # a malformed class is a spec bug, not a crash
+        return False
+
+
+# --- analyze ----------------------------------------------------------------
+
+
+def analyze(d: Path) -> tuple[list[str], list[str]]:
+    text = (d / SPEC).read_text(encoding="utf-8")
+    block = task_block(text)
+    errors: list[str] = []
+    advisories: list[str] = []
+
+    repos = block.get("target_repos")
+    if not isinstance(repos, list) or not repos or not all(isinstance(r, str) for r in repos):
+        errors.append("spec: `target_repos` must be a non-empty array of repo names")
+        repos = []
+    tasks = block.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        return errors + ["spec: `tasks` must be a non-empty array"], advisories
+
+    prose = text.split(TASKS_BEGIN, 1)[0]
+    # a withdrawn requirement (`~~FR-007~~ (withdrawn)`) is not a coverage obligation
+    withdrawn = set(re.findall(r"~~\s*([A-Z]+-[0-9]{3})\s*~~", prose))
+    prose_fr = sorted(set(FR_ID.findall(prose)) - withdrawn)
+    prose_us = sorted(set(US_ID.findall(text.split(TASKS_BEGIN, 1)[0])))
+    ids: list[str] = []
+
+    for i, task in enumerate(tasks):
+        label = task.get("id") if isinstance(task, dict) else None
+        where = f"task[{i}]" if not label else f"{label}"
+        if not isinstance(task, dict):
+            errors.append(f"{where}: not an object")
+            continue
+
+        # 1. required keys
+        missing = [k for k in REQUIRED_KEYS if k not in task]
+        if missing:
+            errors.append(f"{where}: missing required key(s): {', '.join(missing)}")
+
+        # 2. id syntax + uniqueness
+        tid = task.get("id")
+        if not isinstance(tid, str) or not TASK_ID.match(tid):
+            errors.append(f"{where}: `id` must match ^T[0-9]{{3}}$ (got {tid!r})")
+        elif tid in ids:
+            errors.append(f"{where}: duplicate id {tid}")
+        else:
+            ids.append(tid)
+
+        # 3. priority
+        if task.get("priority") not in PRIORITIES:
+            errors.append(f"{where}: `priority` must be one of {sorted(PRIORITIES)}")
+
+        # 5. non-empty prose fields
+        for key in ("satisfies", "definition_of_done", "success_criteria"):
+            value = task.get(key)
+            if not isinstance(value, list) or not value:
+                errors.append(f"{where}: `{key}` must be a non-empty array")
+            elif not all(isinstance(v, str) and v.strip() for v in value):
+                errors.append(f"{where}: `{key}` entries must be non-empty strings")
+
+        # 6. target_repo
+        if isinstance(repos, list) and task.get("target_repo") not in repos:
+            errors.append(f"{where}: `target_repo` {task.get('target_repo')!r} not in target_repos")
+
+        # 7. scope globs
+        scope = task.get("scope")
+        if not isinstance(scope, list) or not scope:
+            errors.append(f"{where}: `scope` must be a non-empty array")
+            scope = []
+        for g in scope:
+            if not isinstance(g, str) or not g:
+                errors.append(f"{where}: scope entry must be a non-empty string")
+            elif g.startswith("/"):
+                errors.append(f"{where}: scope {g!r} is absolute")
+            elif ".." in g:
+                errors.append(f"{where}: scope {g!r} contains '..'")
+            elif not SCOPE_ALLOWED.match(g):
+                errors.append(f"{where}: scope {g!r} has characters outside A-Za-z0-9._*?[]/-")
+            elif VACUOUS_GLOB.match(g):
+                advisories.append(f"{where}: scope-breadth-anomaly — {g!r} is vacuous")
+
+        # 8. dod_tests selectors
+        dod = task.get("dod_tests")
+        if not isinstance(dod, list) or not dod:
+            errors.append(f"{where}: `dod_tests` must be a non-empty array")
+        else:
+            for s in dod:
+                if not isinstance(s, str):
+                    errors.append(f"{where}: dod_tests entry {s!r} is not a valid selector")
+                elif "::" in s:
+                    errors.append(
+                        f"{where}: dod_tests {s!r} uses the rejected ::pattern form "
+                        "(pattern execution is not a defined convention — name a whole file)"
+                    )
+                elif not SELECTOR.match(s):
+                    errors.append(f"{where}: dod_tests entry {s!r} is not a valid selector")
+
+        # 9. sc_evidence, bidirectional
+        ev = task.get("sc_evidence")
+        scs = task.get("success_criteria") if isinstance(task.get("success_criteria"), list) else []
+        if not isinstance(ev, list) or not ev:
+            errors.append(f"{where}: `sc_evidence` must be a non-empty array")
+        else:
+            covered: set[int] = set()
+            for entry in ev:
+                if not isinstance(entry, dict):
+                    errors.append(f"{where}: sc_evidence entry is not an object")
+                    continue
+                n = entry.get("sc")
+                path = entry.get("path")
+                if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= len(scs):
+                    errors.append(f"{where}: sc_evidence sc={n!r} does not resolve to a 1-based index of success_criteria")
+                else:
+                    covered.add(n)
+                if not isinstance(path, str) or not EVIDENCE_PATH.match(path):
+                    errors.append(f"{where}: sc_evidence path {path!r} is not a well-formed repo-relative file")
+                elif path.startswith("/") or ".." in path:
+                    errors.append(f"{where}: sc_evidence path {path!r} must be repo-relative")
+                elif scope and not any(scope_matches(path, g) for g in scope if isinstance(g, str)):
+                    errors.append(f"{where}: sc_evidence path {path!r} is matched by no scope glob")
+                for k in ("must_match", "must_not_match"):
+                    if k in entry and (not isinstance(entry[k], str) or not entry[k]):
+                        errors.append(f"{where}: sc_evidence {k} must be a non-empty ERE")
+            if scs:
+                for n in range(1, len(scs) + 1):
+                    if n not in covered:
+                        errors.append(f"{where}: success_criteria[{n}] has no sc_evidence entry")
+
+        # traceability of satisfies
+        for ref in task.get("satisfies") or []:
+            if not isinstance(ref, str):
+                continue
+            if FR_ID.fullmatch(ref):
+                if ref not in prose_fr:
+                    errors.append(f"{where}: satisfies {ref} is not defined in the prose requirements")
+            elif US_ID.fullmatch(ref):
+                if ref not in prose_us:
+                    errors.append(f"{where}: satisfies {ref} is not a story defined in the prose")
+            else:
+                errors.append(f"{where}: satisfies {ref!r} is neither FR-NNN nor USn")
+
+    # 4. depends_on resolution + acyclicity (after all ids are known)
+    graph: dict[str, list[str]] = {}
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        tid = task.get("id")
+        deps = task.get("depends_on")
+        if not isinstance(deps, list):
+            errors.append(f"{tid or 'task'}: `depends_on` must be an array")
+            continue
+        graph[tid] = []
+        for dep in deps:
+            if dep not in ids:
+                errors.append(f"{tid}: depends_on {dep!r} does not resolve to a task id")
+            else:
+                graph[tid].append(dep)
+    state: dict[str, int] = {}
+
+    def visit(node: str, trail: list[str]) -> None:
+        if state.get(node) == 1:
+            cycle = " → ".join(trail[trail.index(node):] + [node])
+            errors.append(f"depends_on: cycle {cycle}")
+            return
+        if state.get(node) == 2:
+            return
+        state[node] = 1
+        for dep in graph.get(node, []):
+            visit(dep, trail + [node])
+        state[node] = 2
+
+    for node in graph:
+        visit(node, [])
+
+    # every prose FR must be satisfied by at least one task
+    satisfied = {
+        ref
+        for task in tasks
+        if isinstance(task, dict)
+        for ref in (task.get("satisfies") or [])
+        if isinstance(ref, str)
+    }
+    for fr in prose_fr:
+        if fr not in satisfied:
+            errors.append(f"{fr}: defined in the prose but satisfied by no task")
+
+    return errors, advisories
+
+
+def latest_build(rows: list[dict], tid: str) -> dict | None:
+    """The current build state of a task: the LATEST build row.
+
+    Every run stays in the trail — a red run followed by a green one is visible as exactly
+    that — but what "is" the task's build state is the last thing that happened.
+    """
+    seen = [r for r in rows if r.get("event") == "build-recorded" and r.get("task") == tid]
+    return seen[-1] if seen else None
+
+
+def latest_review(rows: list[dict], tid: str) -> dict | None:
+    """The current review state of a task: the LATEST review row.
+
+    A re-review supersedes the earlier one — that is the whole point of re-running the lanes
+    after a fix, and the alternative (every open finding stays open forever) makes a clean
+    second pass unable to clear a resolved first one.
+    """
+    seen = [r for r in rows if r.get("event") == "review-recorded" and r.get("task") == tid]
+    return seen[-1] if seen else None
+
+
+def spec_name(d: Path) -> str:
+    return d.name
+
+
+def strict_errors(d: Path, rows: list[dict]) -> list[str]:
+    """Readiness: the trail must back every claim the spec makes."""
+    errors: list[str] = []
+    text = (d / SPEC).read_text(encoding="utf-8")
+    tasks = [t for t in task_block(text).get("tasks", []) if isinstance(t, dict)]
+    ratified = [r for r in rows if r.get("event") == "ratified"]
+    if not ratified:
+        errors.append("trail: no `ratified` row — a human Gate-A sign-off is required")
+    if not (d / UNDERSTANDING).is_file():
+        errors.append(f"trail: no {UNDERSTANDING} beside the spec")
+
+    done = {r.get("task") for r in rows if r.get("event") == "task-complete"}
+    for task in tasks:
+        tid = task.get("id")
+        if tid not in done:
+            errors.append(f"trail: {tid} has no `task-complete` row")
+            continue
+        if not (latest_build(rows, tid) or {}).get("green"):
+            errors.append(f"trail: {tid} is complete but its latest build is not green")
+        latest = latest_review(rows, tid)
+        if latest is None:
+            errors.append(f"trail: {tid} is complete but was never reviewed")
+        elif (latest.get("open_sev12") or 0) > 0:
+            errors.append(f"trail: {tid} is complete with open SEV1/SEV2 findings")
+    return errors
+
+
+# --- verbs ------------------------------------------------------------------
+
+
+def next_spec_number(root: Path) -> int:
+    specs = root / "specs"
+    nums = []
+    if specs.is_dir():
+        for child in specs.iterdir():
+            m = re.match(r"^([0-9]{3})-", child.name)
+            if m and child.is_dir():
+                nums.append(int(m.group(1)))
+    return max(nums, default=0) + 1
+
+
+def cmd_start(args: argparse.Namespace) -> int:
+    root = Path(git("rev-parse", "--show-toplevel"))
+    slug = re.sub(r"[^a-z0-9]+", "-", args.slug.lower()).strip("-")
+    if not slug:
+        raise Refused("start: slug has no usable characters")
+    n = next_spec_number(root)
+    d = root / "specs" / f"{n:03d}-{slug}"
+    if d.exists():
+        raise Refused(f"start: {d.relative_to(root)} already exists")
+    template = Path(__file__).resolve().parent.parent / "templates" / "spec-template.md"
+    if not template.is_file():
+        raise Refused(f"start: template missing at {template}")
+    text = template.read_text(encoding="utf-8")
+    objective = args.objective or "[PLACEHOLDER — one or two sentences: the outcome wanted, in the user's words.]"
+    text = text.replace(
+        "- **Objective:** [PLACEHOLDER — one or two sentences: the outcome wanted, in the user's words.]",
+        f"- **Objective:** {objective}",
+    )
+    repo = args.repo or root.name
+    text = text.replace(
+        "- **Target Repo(s):** [PLACEHOLDER — repo slug(s), e.g. `pi-agents`. Must match `target_repos` in the Task Breakdown.]",
+        f"- **Target Repo(s):** `{repo}`",
+    )
+    text = text.replace("`forge/<slug>`", f"`forge/{n:03d}-{slug}`")
+    d.mkdir(parents=True)
+    (d / SPEC).write_text(text, encoding="utf-8")
+    (d / RECORDS).write_text("", encoding="utf-8")
+    append_row(
+        d,
+        {
+            "event": "spec-scaffolded",
+            "who": "agent:architect",
+            "spec": f"specs/{d.name}/{SPEC}",
+            "branch": f"forge/{d.name}",
+        },
+    )
+    print(f"scaffolded specs/{d.name}/{SPEC}  (branch: forge/{d.name})")
+    print(f"next: author it, then `forge-gate analyze specs/{d.name}`")
+    return 0
+
+
+def cmd_analyze(args: argparse.Namespace) -> int:
+    d, _ = spec_paths(args.spec_dir)
+    errors, advisories = analyze(d)
+    rows = read_rows(d)
+    if args.strict:
+        errors += strict_errors(d, rows)
+    for a in advisories:
+        print(f"  advisory  {a}")
+    if errors:
+        for e in errors:
+            print(f"  FAIL  {e}")
+        print(f"\n{d.name}: {len(errors)} problem(s) — the spec is not acceptable")
+        return 1
+    tasks = task_block((d / SPEC).read_text(encoding="utf-8")).get("tasks", [])
+    suffix = " (strict: trail complete)" if args.strict else ""
+    print(f"  ok    {len(tasks)} task(s), nine invariants + FR↔task traceability{suffix}")
+    print(f"\n{d.name}: acceptable")
+    return 0
+
+
+def cmd_ratify(args: argparse.Namespace) -> int:
+    d, _ = spec_paths(args.spec_dir)
+    if not (d / UNDERSTANDING).is_file():
+        raise Refused(f"ratify: {UNDERSTANDING} is missing — write the Gate-A projection first")
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise Refused(
+            "ratify: refusal — Gate A is the human's sign-off and needs an interactive "
+            "terminal (stdin and stdout are not a TTY). An agent cannot ratify."
+        )
+    errors, _ = analyze(d)
+    if errors:
+        raise Refused("ratify: the spec does not pass `analyze` — fix it before ratifying")
+    sha = hashlib.sha256((d / UNDERSTANDING).read_bytes()).hexdigest()
+    print(f"Ratify Gate A for {d.name}?")
+    print(f"  understanding.md sha256:{sha}")
+    answer = input("type 'ratify' to sign: ").strip()
+    if answer != "ratify":
+        print("not ratified")
+        return 1
+    append_row(
+        d,
+        {
+            "event": "ratified",
+            "who": git_user(),
+            "sha": f"sha256:{sha}",
+            "understanding": UNDERSTANDING,
+        },
+    )
+    print("ratified — the trail carries the token; agents cannot produce this row")
+    return 0
+
+
+def task_of(d: Path, tid: str) -> dict:
+    for task in task_block((d / SPEC).read_text(encoding="utf-8")).get("tasks", []):
+        if isinstance(task, dict) and task.get("id") == tid:
+            return task
+    raise Refused(f"{tid}: no such task in the breakdown")
+
+
+def require_ratified(d: Path, rows: list[dict], verb: str) -> None:
+    if not any(r.get("event") == "ratified" for r in rows):
+        raise Refused(f"{verb}: {d.name} is not ratified — no task work before Gate A")
+
+
+def cmd_claim(args: argparse.Namespace) -> int:
+    d, _ = spec_paths(args.spec_dir)
+    rows = read_rows(d)
+    require_ratified(d, rows, "claim")
+    errors, _ = analyze(d)
+    if errors:
+        raise Refused("claim: the spec does not pass `analyze`")
+    task = task_of(d, args.task)
+    branch = f"forge/{d.name}"
+    head = git("rev-parse", "--abbrev-ref", "HEAD")
+    if head != branch:
+        raise Refused(f"claim: HEAD is '{head}'; forge mode commits only on '{branch}' (git switch -c {branch})")
+    deps = task.get("depends_on") or []
+    done = {r.get("task") for r in rows if r.get("event") == "task-complete"}
+    for dep in deps:
+        if dep not in done:
+            raise Refused(f"claim: {args.task} depends on {dep}, which is not complete")
+    if any(r.get("event") == "task-claimed" and r.get("task") == args.task for r in rows) and not any(
+        r.get("event") == "task-complete" and r.get("task") == args.task for r in rows
+    ):
+        print(f"note: {args.task} was claimed before and is not complete; continuing")
+    append_row(
+        d,
+        {
+            "event": "task-claimed",
+            "task": args.task,
+            "who": args.who,
+            "model": args.model or "inherited",
+            "branch": branch,
+        },
+    )
+    print(f"claimed {args.task} on {branch}")
+    return 0
+
+
+def cmd_build(args: argparse.Namespace) -> int:
+    d, _ = spec_paths(args.spec_dir)
+    rows = read_rows(d)
+    require_ratified(d, rows, "build")
+    task = task_of(d, args.task)
+    if not any(r.get("event") == "task-claimed" and r.get("task") == args.task for r in rows):
+        raise Refused(f"build: {args.task} was never claimed")
+    root = Path(git("rev-parse", "--show-toplevel"))
+    results = []
+    for selector in task.get("dod_tests") or []:
+        proc = subprocess.run(
+            ["timeout", str(args.timeout), "bash", selector],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+        )
+        results.append({"selector": selector, "exit": proc.returncode})
+        print(f"  {'ok  ' if proc.returncode == 0 else 'FAIL'}  {selector} (exit {proc.returncode})")
+        if proc.returncode != 0:
+            tail = (proc.stdout + proc.stderr).strip().splitlines()[-8:]
+            for line in tail:
+                print(f"        {line}")
+    green = bool(results) and all(r["exit"] == 0 for r in results)
+    append_row(
+        d,
+        {
+            "event": "build-recorded",
+            "task": args.task,
+            "who": args.who,
+            "models": args.models or ["inherited"],
+            "selectors": results,
+            "green": green,
+        },
+    )
+    print(f"\n{args.task}: {'green' if green else 'red'} ({len(results)} selector(s))")
+    return 0 if green else 1
+
+
+def cmd_review(args: argparse.Namespace) -> int:
+    d, _ = spec_paths(args.spec_dir)
+    rows = read_rows(d)
+    require_ratified(d, rows, "review")
+    task_of(d, args.task)
+    if not any(r.get("event") == "build-recorded" and r.get("task") == args.task for r in rows):
+        raise Refused(f"review: {args.task} has no build recorded — review the built task, not an idea")
+    append_row(
+        d,
+        {
+            "event": "review-recorded",
+            "task": args.task,
+            "who": args.who,
+            "lanes": args.lanes or [],
+            "verdict": args.verdict,
+            "findings": args.findings,
+            "open_sev12": args.open_sev12,
+        },
+    )
+    print(f"recorded review of {args.task}: {args.verdict}, {args.findings} finding(s), "
+          f"{args.open_sev12} open SEV1/SEV2")
+    return 0
+
+
+def cmd_complete(args: argparse.Namespace) -> int:
+    d, _ = spec_paths(args.spec_dir)
+    rows = read_rows(d)
+    require_ratified(d, rows, "complete")
+    task = task_of(d, args.task)
+    scope = [g for g in task.get("scope") or [] if isinstance(g, str)]
+
+    if not (latest_build(rows, args.task) or {}).get("green"):
+        raise Refused(f"complete: {args.task} has no green build row (or its latest run was red)")
+    latest = latest_review(rows, args.task)
+    if latest is None:
+        raise Refused(f"complete: {args.task} was never reviewed")
+    if (latest.get("open_sev12") or 0) > 0:
+        raise Refused(
+            f"complete: {args.task} still has open SEV1/SEV2 findings "
+            f"(latest review {latest.get('verdict')}, {latest.get('open_sev12')} open)"
+        )
+
+    # the scope check: the task commit's diff must sit inside the task's declared scope —
+    # except for this spec's own directory, because the audit trail is meant to be committed
+    # with the work it describes. The exemption is the spec dir, not "any specs/ tree".
+    changed = [p for p in git("show", "--pretty=format:", "--name-only", args.commit).splitlines() if p]
+    audit_prefix = f"specs/{d.name}/"
+    exempt = [p for p in changed if p.startswith(audit_prefix)]
+    outside = [
+        p for p in changed if not p.startswith(audit_prefix) and not any(scope_matches(p, g) for g in scope)
+    ]
+    if exempt:
+        print(f"note: {len(exempt)} audit path(s) under {audit_prefix} exempt from the scope check")
+    if outside:
+        raise Refused(
+            f"complete: {args.task}'s commit {args.commit[:8]} touches paths outside its scope "
+            f"{scope}: {', '.join(outside)}"
+        )
+    append_row(
+        d,
+        {"event": "task-complete", "task": args.task, "commit": args.commit, "paths": changed},
+    )
+    print(f"complete: {args.task} ({len(changed)} path(s), all in scope)")
+    return 0
+
+
+def cmd_finish(args: argparse.Namespace) -> int:
+    d, _ = spec_paths(args.spec_dir)
+    rows = read_rows(d)
+    errors, _ = analyze(d)
+    errors += strict_errors(d, rows)
+    if errors:
+        for e in errors:
+            print(f"  FAIL  {e}")
+        raise Refused("finish: refusing to open a PR while the spec or its trail is incomplete")
+    branch = f"forge/{d.name}"
+    head = git("rev-parse", "--abbrev-ref", "HEAD")
+    if head != branch:
+        raise Refused(f"finish: HEAD is '{head}', expected '{branch}'")
+    git("push", "-u", "origin", branch)
+    body = render_report(d, rows)
+    cmd = ["gh", "pr", "create", "--head", branch, "--title", f"forge: {d.name}", "--body", body]
+    if args.draft:
+        cmd.append("--draft")
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise Refused(f"finish: gh pr create failed: {(proc.stderr or proc.stdout).strip()}")
+    url = (proc.stdout.strip().splitlines() or [""])[-1]
+    append_row(d, {"event": "pr-opened", "branch": branch, "url": url, "who": args.who})
+    print(f"pushed {branch} and opened {url}")
+    return 0
+
+
+def render_report(d: Path, rows: list[dict]) -> str:
+    counts: dict[str, int] = {}
+    for r in rows:
+        counts[r["event"]] = counts.get(r["event"], 0) + 1
+    lines = [f"## forge trail — `specs/{d.name}`", ""]
+    lines.append("| event | count |")
+    lines.append("| --- | --- |")
+    for event in sorted(counts):
+        lines.append(f"| `{event}` | {counts[event]} |")
+    lines += ["", "## trail", ""]
+    lines.append("| ts | event | task | who | detail |")
+    lines.append("| --- | --- | --- | --- | --- |")
+    for r in rows:
+        detail = r.get("verdict") or r.get("url") or r.get("sha") or (
+            "green" if r.get("green") else ("red" if "green" in r else "")
+        )
+        lines.append(
+            f"| {r.get('ts', '')} | `{r['event']}` | {r.get('task', '')} | "
+            f"{r.get('who', '')} | {detail} |"
+        )
+    return "\n".join(lines)
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    d, _ = spec_paths(args.spec_dir)
+    rows = read_rows(d)
+    if not rows:
+        raise Refused(f"report: {RECORDS} is empty")
+    print(render_report(d, rows))
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="forge-gate", description=__doc__.splitlines()[0])
+    sub = parser.add_subparsers(dest="verb", required=True)
+
+    p = sub.add_parser("start", help="scaffold specs/NNN-<slug>/ from the shipped template")
+    p.add_argument("slug")
+    p.add_argument("--objective", default="")
+    p.add_argument("--repo", default="")
+    p.set_defaults(func=cmd_start)
+
+    p = sub.add_parser("analyze", help="the nine invariants + FR<->task traceability")
+    p.add_argument("spec_dir")
+    p.add_argument("--strict", action="store_true", help="also require a complete trail")
+    p.add_argument("--json", action="store_true", help="accepted, unused (stable CLI)")
+    p.set_defaults(func=cmd_analyze)
+
+    p = sub.add_parser("ratify", help="Gate A: the human's token (TTY only)")
+    p.add_argument("spec_dir")
+    p.set_defaults(func=cmd_ratify)
+
+    p = sub.add_parser("claim", help="claim a task (requires ratify + analyze)")
+    p.add_argument("spec_dir")
+    p.add_argument("task")
+    p.add_argument("--who", default="agent:builder")
+    p.add_argument("--model", default="")
+    p.set_defaults(func=cmd_claim)
+
+    p = sub.add_parser("build", help="run a task's dod_tests and record the result")
+    p.add_argument("spec_dir")
+    p.add_argument("task")
+    p.add_argument("--who", default="agent:builder")
+    p.add_argument("--models", nargs="*", default=[])
+    p.add_argument("--timeout", type=int, default=900)
+    p.set_defaults(func=cmd_build)
+
+    p = sub.add_parser("review", help="record a review of a built task")
+    p.add_argument("spec_dir")
+    p.add_argument("task")
+    p.add_argument("--verdict", default="CLEAN")
+    p.add_argument("--findings", type=int, default=0)
+    p.add_argument("--open-sev12", type=int, default=0, dest="open_sev12")
+    p.add_argument("--lanes", nargs="*", default=[])
+    p.add_argument("--who", default="agent:dispatcher")
+    p.set_defaults(func=cmd_review)
+
+    p = sub.add_parser("complete", help="mark a task complete (scope-checked against its commit)")
+    p.add_argument("spec_dir")
+    p.add_argument("task")
+    p.add_argument("--commit", required=True)
+    p.set_defaults(func=cmd_complete)
+
+    p = sub.add_parser("finish", help="push the branch and open the PR")
+    p.add_argument("spec_dir")
+    p.add_argument("--draft", action="store_true")
+    p.add_argument("--who", default="agent:dispatcher")
+    p.set_defaults(func=cmd_finish)
+
+    p = sub.add_parser("report", help="print the audit trail")
+    p.add_argument("spec_dir")
+    p.set_defaults(func=cmd_report)
+
+    args = parser.parse_args(argv)
+    try:
+        return args.func(args)
+    except Refused as exc:
+        print(f"forge-gate: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

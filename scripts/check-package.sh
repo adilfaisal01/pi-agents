@@ -55,6 +55,7 @@ run "review-gate: stub-lane suite" review-gate/check.sh
 # Skip-capable: without `pi` this reports SKIP and exits 0, so a runner that cannot resolve a
 # model id does not fail the package — but a sample pin that has rotted DOES fail here.
 run "forge: role-model sample stays honest" forge/check-role-models.sh
+run "forge: gate fixtures (nine invariants + the trail)" forge/check-gate.sh
 
 echo
 if [ "$FAILED" -eq 0 ]; then
