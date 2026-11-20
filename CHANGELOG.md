@@ -32,6 +32,16 @@
   everywhere else it presents the diff and waits. Review follows the same split — the harness owns
   it in a forge checkout, the two-model swarm runs automatically anywhere else. Selftest grew from
   38 to 52 assertions. Design and decisions: `docs/forge-mode-plan.md`.
+- **The branch is reviewed before the PR exists, and the review is posted.** The original forge ran its
+  reviewer after `gh pr create` and fire-and-forgot the result; here the whole-branch two-lane review is
+  recorded first (`forge-gate review <spec> --branch`), `finish` refuses while the branch review is
+  missing or has open SEV1/SEV2, and only then does the PR open — with the review in the PR body, posted
+  again as a `gh pr comment`, and recorded as a `review-posted` row. `review --branch --post` re-posts
+  after a fix, and refuses rather than skipping silently when no PR exists yet. One renderer
+  (`render_review`) feeds the body, the comment and `report`, so the three cannot drift.
+  `check-gate.sh`: 52 → 63 fixtures, including an end-to-end `finish` against a bare remote with a
+  stubbed `gh` that asserts the PR is created, the review is posted, the posting is recorded, and the
+  pushed branch carries the `audit:` commit.
 - **`forge-gate complete` verifies evidence instead of trusting its name.** `analyze` proves only that
   an `sc_evidence` path is well-formed and in scope; until now nothing checked the file existed, so a
   spec could name evidence the build never created and the task still completed. `complete` now reads

@@ -42,8 +42,9 @@ each arrow checkable:
 | claim | `forge-gate claim <spec> T00N` | unratified spec, a failing `analyze`, an incomplete `depends_on`, a checkout sitting on the integration branch |
 | build | `forge-gate build <spec> T00N` | nothing — it *runs* the `dod_tests` selectors and records green/red itself |
 | review | `forge-gate review <spec> T00N --verdict … --open-sev12 N` | nothing; it records what the lanes said |
+| review (branch) | `forge-gate review <spec> --branch [--post]` | an incomplete branch; `--post` before a PR exists |
 | complete | `forge-gate complete <spec> T00N --commit SHA` | no green build, no review, open SEV1/SEV2, a commit that escaped the task's `scope`, **evidence missing from the commit's tree / a symlink / failing `must_match` / hitting `must_not_match`**, an integration branch that cannot fast-forward |
-| finish | `forge-gate finish <spec>` | an incomplete task, a failing `analyze --strict`, a missing trail row |
+| finish | `forge-gate finish <spec>` | an incomplete task, a failing `analyze --strict`, no branch review, a branch review with open SEV1/SEV2, a missing trail row |
 | clean | `forge-gate clean <spec> [--force]` | a dirty worktree, without `--force` |
 | audit | `forge-gate report <spec>` | a `records.jsonl` line that is not one JSON object per line |
 
@@ -80,6 +81,11 @@ Two properties worth stating plainly, because they are the whole regulatory argu
 - **Green means the gate ran it.** `build` executes each `dod_tests` selector (`timeout … bash
   <selector>`) and records the exit code; `complete` reads that row. An agent saying "tests pass" is
   not a state the gate can be in.
+- **The PR is reviewed before it exists.** The forge ran its reviewer *after* `gh pr create` and
+  ignored the outcome; here the whole-branch two-lane review is recorded first (`review --branch`),
+  `finish` refuses while SEV1/SEV2 are open, and only then is the PR opened — with the review in its
+  body, posted again as a comment, and recorded as a `review-posted` row. Stricter than the original,
+  deliberately: nothing is posted that has not been through both lanes.
 - **Evidence is checked, not named.** `analyze` only proves an `sc_evidence` path is well-formed and
   in scope; `complete` reads the path out of the task commit and requires it in the tree
   (`missing-from-tree`), as a real file rather than a symlink, and — when the criterion carries

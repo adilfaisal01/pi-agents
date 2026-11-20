@@ -434,6 +434,12 @@ def analyze(d: Path) -> tuple[list[str], list[str]]:
     return errors, advisories
 
 
+def latest_spec_review(rows: list[dict]) -> dict | None:
+    """The whole-branch review — the gate the PR has to pass before it exists."""
+    seen = [r for r in rows if r.get("event") == "spec-reviewed"]
+    return seen[-1] if seen else None
+
+
 def latest_build(rows: list[dict], tid: str) -> dict | None:
     """The current build state of a task: the LATEST build row.
 
@@ -469,6 +475,17 @@ def strict_errors(d: Path, rows: list[dict]) -> list[str]:
         errors.append("trail: no `ratified` row — a human Gate-A sign-off is required")
     if not (d / UNDERSTANDING).is_file():
         errors.append(f"trail: no {UNDERSTANDING} beside the spec")
+
+    final = latest_spec_review(rows)
+    if final is None:
+        errors.append(
+            "trail: no `spec-reviewed` row — the whole branch has not been reviewed "
+            "(run the two lanes, then `forge-gate review <spec> --branch`)"
+        )
+    elif (final.get("open_sev12") or 0) > 0:
+        errors.append(
+            f"trail: the branch review left {final.get('open_sev12')} SEV1/SEV2 finding(s) open"
+        )
 
     done = {r.get("task") for r in rows if r.get("event") == "task-complete"}
     for task in tasks:
@@ -624,6 +641,17 @@ def cmd_claim(args: argparse.Namespace) -> int:
         )
 
     deps = task.get("depends_on") or []
+    final = latest_spec_review(rows)
+    if final is None:
+        errors.append(
+            "trail: no `spec-reviewed` row — the whole branch has not been reviewed "
+            "(run the two lanes, then `forge-gate review <spec> --branch`)"
+        )
+    elif (final.get("open_sev12") or 0) > 0:
+        errors.append(
+            f"trail: the branch review left {final.get('open_sev12')} SEV1/SEV2 finding(s) open"
+        )
+
     done = {r.get("task") for r in rows if r.get("event") == "task-complete"}
     for dep in deps:
         if dep not in done:
@@ -703,6 +731,56 @@ def cmd_review(args: argparse.Namespace) -> int:
     d, _ = spec_paths(args.spec_dir)
     rows = read_rows(d)
     require_ratified(d, rows, "review")
+
+    if args.branch:
+        # the gauntlet: the whole branch is reviewed BEFORE the PR exists, so what is posted has
+        # already been through both lanes. The forge did this after `gh pr create`; being stricter
+        # is the deliberate divergence.
+        text = (d / SPEC).read_text(encoding="utf-8")
+        unfinished = [
+            t.get("id")
+            for t in task_block(text).get("tasks", [])
+            if isinstance(t, dict) and t.get("id") not in {r.get("task") for r in rows if r.get("event") == "task-complete"}
+        ]
+        if unfinished:
+            raise Refused(
+                f"review --branch: {', '.join(str(t) for t in unfinished)} not complete — review the "
+                "assembled branch, not a partial one"
+            )
+        append_row(
+            d,
+            {
+                "event": "spec-reviewed",
+                "who": args.who,
+                "lanes": args.lanes or [],
+                "verdict": args.verdict,
+                "findings": args.findings,
+                "open_sev12": args.open_sev12,
+            },
+        )
+        print(
+            f"recorded the whole-branch review: {args.verdict}, {args.findings} finding(s), "
+            f"{args.open_sev12} open SEV1/SEV2"
+        )
+        if args.open_sev12 > 0:
+            print("  note: `finish` will refuse until SEV1/SEV2 are closed and the review re-run")
+        if args.post:
+            opened = [r for r in rows if r.get("event") == "pr-opened"]
+            if not opened:
+                raise Refused(
+                    "review --post: no PR has been opened for this spec yet — `finish` posts the "
+                    "review when it opens one"
+                )
+            url = opened[-1].get("url") or ""
+            if post_comment(url, render_review(d, read_rows(d))):
+                append_row(
+                    d, {"event": "review-posted", "url": url, "where": "comment", "who": args.who}
+                )
+                print(f"  posted the review to {url}")
+        return 0
+
+    if not args.task:
+        raise Refused("review: name a task, or pass --branch for the whole-branch review")
     task_of(d, args.task)
     if not any(r.get("event") == "build-recorded" and r.get("task") == args.task for r in rows):
         raise Refused(f"review: {args.task} has no build recorded — review the built task, not an idea")
@@ -721,7 +799,6 @@ def cmd_review(args: argparse.Namespace) -> int:
     print(f"recorded review of {args.task}: {args.verdict}, {args.findings} finding(s), "
           f"{args.open_sev12} open SEV1/SEV2")
     return 0
-
 
 
 # --- evidence verification ---------------------------------------------------
@@ -920,6 +997,16 @@ def cmd_finish(args: argparse.Namespace) -> int:
     url = (proc.stdout.strip().splitlines() or [""])[-1]
     append_row(d, {"event": "pr-opened", "branch": branch, "url": url, "who": args.who})
     print(f"pushed {branch} and opened {url}")
+
+    # the review is posted, not just recorded: the PR body carries it, and it goes in as a comment
+    # too, so the review is part of the PR's own timeline rather than only of our trail file
+    if url and not args.no_post:
+        if post_comment(url, render_review(d, read_rows(d)), cwd=iwt):
+            append_row(
+                d,
+                {"event": "review-posted", "branch": branch, "url": url, "where": "comment", "who": args.who},
+            )
+            print("  posted the review as a PR comment")
     return 0
 
 
@@ -948,6 +1035,46 @@ def cmd_clean(args: argparse.Namespace) -> int:
     return 0
 
 
+def render_review(d: Path, rows: list[dict]) -> str:
+    """The review section. One renderer, so the PR body and the posted comment cannot drift."""
+    final = latest_spec_review(rows)
+    out = ["## review", ""]
+    if final is None:
+        out.append("_The whole branch has not been reviewed._")
+    else:
+        out.append(
+            f"**{final.get('verdict', 'UNKNOWN')}** · {final.get('findings', 0)} finding(s) · "
+            f"{final.get('open_sev12', 0)} SEV1/SEV2 open"
+            + (f" · lanes: {', '.join(final.get('lanes') or [])}" if final.get("lanes") else "")
+        )
+    per_task = []
+    for task in task_block((d / SPEC).read_text(encoding="utf-8")).get("tasks", []):
+        if not isinstance(task, dict):
+            continue
+        tid = task.get("id")
+        rv = latest_review(rows, tid)
+        if rv is None:
+            continue
+        per_task.append(
+            f"| {tid} | {rv.get('verdict', '')} | {rv.get('findings', 0)} | {rv.get('open_sev12', 0)} |"
+        )
+    if per_task:
+        out += ["", "| task | verdict | findings | SEV1/2 open |", "| --- | --- | --- | --- |"]
+        out += per_task
+    return "\n".join(out)
+
+
+def post_comment(pr_url: str, body: str, cwd: Path | None = None) -> bool:
+    proc = subprocess.run(
+        ["gh", "pr", "comment", pr_url, "--body", body],
+        capture_output=True, text=True, cwd=str(cwd) if cwd else None,
+    )
+    if proc.returncode != 0:
+        print(f"  warn  gh pr comment failed: {(proc.stderr or proc.stdout).strip()}")
+        return False
+    return True
+
+
 def render_report(d: Path, rows: list[dict]) -> str:
     counts: dict[str, int] = {}
     for r in rows:
@@ -957,6 +1084,7 @@ def render_report(d: Path, rows: list[dict]) -> str:
     lines.append("| --- | --- |")
     for event in sorted(counts):
         lines.append(f"| `{event}` | {counts[event]} |")
+    lines += render_review(d, rows).split("\n")
     lines += ["", "## trail", ""]
     lines.append("| ts | event | task | who | detail |")
     lines.append("| --- | --- | --- | --- | --- |")
@@ -1015,9 +1143,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--timeout", type=int, default=900)
     p.set_defaults(func=cmd_build)
 
-    p = sub.add_parser("review", help="record a review of a built task")
+    p = sub.add_parser("review", help="record a review: a built task, or the whole branch (--branch)")
     p.add_argument("spec_dir")
-    p.add_argument("task")
+    p.add_argument("task", nargs="?")
+    p.add_argument("--branch", action="store_true", help="the whole-branch review, before the PR")
+    p.add_argument("--post", action="store_true", help="re-post the review to the open PR")
     p.add_argument("--verdict", default="CLEAN")
     p.add_argument("--findings", type=int, default=0)
     p.add_argument("--open-sev12", type=int, default=0, dest="open_sev12")
@@ -1031,9 +1161,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--commit", required=True)
     p.set_defaults(func=cmd_complete)
 
-    p = sub.add_parser("finish", help="push the branch and open the PR")
+    p = sub.add_parser("finish", help="push the branch, open the PR, post the review")
     p.add_argument("spec_dir")
     p.add_argument("--draft", action="store_true")
+    p.add_argument("--no-post", action="store_true", dest="no_post", help="do not post the review comment")
     p.add_argument("--who", default="agent:dispatcher")
     p.set_defaults(func=cmd_finish)
 

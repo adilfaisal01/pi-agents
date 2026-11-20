@@ -304,12 +304,18 @@ if [ -d "$TASK" ] && [ "$(git -C "$TASK" rev-parse --abbrev-ref HEAD)" = "forge/
 else
 	bad "claim created a task worktree on its own branch, outside the checkout"
 fi
-if [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] && git worktree list --porcelain | grep -q "branch refs/heads/forge/001-fixture$"; then
+WT_LIST=$(git worktree list --porcelain)
+case "$WT_LIST" in
+*branch\ refs/heads/forge/001-fixture*) WT_ON_INTEG=1 ;;
+*) WT_ON_INTEG=0 ;;
+esac
+if [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] && [ "$WT_ON_INTEG" = 1 ]; then
 	ok "the repo checkout stays on main; the integration branch lives in its own worktree"
 else
 	bad "the repo checkout stays on main; the integration branch lives in its own worktree"
 fi
-if git -C "$TASK" status --porcelain | grep -q .; then
+TASK_STATUS=$(git -C "$TASK" status --porcelain)
+if [ -n "$TASK_STATUS" ]; then
 	bad "the task worktree starts clean"
 else
 	ok "the task worktree starts clean"
@@ -469,12 +475,108 @@ else
 	bad "complete refuses a commit that escapes the task's scope"; printf '%s\n' "$out" | sed 's/^/        /'
 fi
 
+# --- the gauntlet: the branch is reviewed before the PR exists ----------------
+out=$("$GATE" review specs/001-fixture --branch --verdict CLEAN --findings 0 --open-sev12 0 2>&1)
+if [ $? -eq 1 ] && printf '%s' "$out" | grep -qF 'not complete'; then
+	ok "the branch review refuses a partial branch"
+else
+	bad "the branch review refuses a partial branch"; printf '%s\n' "$out" | sed 's/^/        /'
+fi
+
 # finish: refuses while a task is incomplete.
 out=$("$GATE" finish specs/001-fixture 2>&1)
 if [ $? -eq 1 ] && printf '%s' "$out" | grep -qF 'refusing to open a PR'; then
 	ok "finish refuses an incomplete trail"
 else
 	bad "finish refuses an incomplete trail"
+fi
+
+# with every task complete but no branch review, `finish` still refuses
+write_spec ok
+"$GATE" claim specs/001-fixture T003 >/dev/null 2>&1 || true
+TASK3="$INTEG/T003"
+mkdir -p "$TASK3/src/evidence" && printf 'e\n' >"$TASK3/src/evidence/e1.txt"
+printf 'value = 9\n' >"$TASK3/src/app.py"
+SHA3=$(commit_in_task "$TASK3" "T003 in scope")
+"$GATE" build specs/001-fixture T003 >/dev/null 2>&1
+"$GATE" review specs/001-fixture T003 --verdict CLEAN --findings 0 --open-sev12 0 >/dev/null 2>&1
+"$GATE" complete specs/001-fixture T003 --commit "$SHA3" >/dev/null 2>&1
+out=$("$GATE" finish specs/001-fixture 2>&1)
+if [ $? -eq 1 ] && printf '%s' "$out" | grep -qF 'no `spec-reviewed` row'; then
+	ok "finish refuses a branch that was never reviewed"
+else
+	bad "finish refuses a branch that was never reviewed"; printf '%s\n' "$out" | sed 's/^/        /'
+fi
+
+# a branch review with open SEV1/2 also blocks the PR
+"$GATE" review specs/001-fixture --branch --verdict CONCERNS --findings 3 --open-sev12 1 >/dev/null 2>&1
+out=$("$GATE" finish specs/001-fixture 2>&1)
+if [ $? -eq 1 ] && printf '%s' "$out" | grep -qF 'left 1 SEV1/SEV2 finding'; then
+	ok "finish refuses a branch review with open SEV1/SEV2"
+else
+	bad "finish refuses a branch review with open SEV1/SEV2"; printf '%s\n' "$out" | sed 's/^/        /'
+fi
+
+# a clean branch review is what lets the strict trail pass
+"$GATE" review specs/001-fixture --branch --verdict CLEAN --findings 0 --open-sev12 0 >/dev/null 2>&1
+if "$GATE" analyze specs/001-fixture --strict >/dev/null 2>&1; then
+	ok "a complete trail with a clean branch review passes analyze --strict"
+else
+	bad "a complete trail with a clean branch review passes analyze --strict"
+fi
+if "$GATE" report specs/001-fixture | grep -qF '## review'; then
+	ok "the report (and therefore the PR body) carries the review"
+else
+	bad "the report (and therefore the PR body) carries the review"
+fi
+
+# review --post refuses while no PR exists (the review happens first, by design)
+out=$("$GATE" review specs/001-fixture --branch --post --verdict CLEAN --findings 0 --open-sev12 0 2>&1)
+if [ $? -eq 1 ] && printf '%s' "$out" | grep -qF 'no PR has been opened'; then
+	ok "posting a review before the PR exists is refused, not silently skipped"
+else
+	bad "posting a review before the PR exists is refused, not silently skipped"; printf '%s\n' "$out" | sed 's/^/        /'
+fi
+
+# --- end to end: finish pushes, opens the PR and POSTS the review --------------
+# A stubbed `gh` records its argv, so the whole finish path is exercised with no network.
+mkdir -p "$WORK/bin"
+cat >"$WORK/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$GH_STUB_LOG"
+if [ "$1 $2" = "pr create" ]; then echo "https://example.invalid/pr/1"; fi
+exit 0
+STUB
+chmod +x "$WORK/bin/gh"
+export GH_STUB_LOG="$WORK/gh.log"
+git init -q --bare "$WORK/remote.git"
+git remote add origin "$WORK/remote.git" 2>/dev/null || true
+PATH="$WORK/bin:$PATH" "$GATE" finish specs/001-fixture >/dev/null 2>&1
+if [ $? -eq 0 ]; then ok "finish completes with a remote and gh available"; else bad "finish completes with a remote and gh available"; fi
+if grep -q 'pr create' "$WORK/gh.log" 2>/dev/null; then
+	ok "finish opens the PR"
+else
+	bad "finish opens the PR"
+fi
+if grep -q 'pr comment' "$WORK/gh.log" 2>/dev/null; then
+	ok "finish POSTS the review as a PR comment"
+else
+	bad "finish POSTS the review as a PR comment"
+fi
+if grep -q '"event": "review-posted"' specs/001-fixture/records.jsonl; then
+	ok "the posting is itself recorded in the trail"
+else
+	bad "the posting is itself recorded in the trail"
+fi
+REMOTE_LOG=$(git -C "$WORK/remote.git" log --oneline forge/001-fixture 2>/dev/null || true)
+case "$REMOTE_LOG" in
+*"audit: specs/001-fixture"*) REMOTE_HAS_AUDIT=1 ;;
+*) REMOTE_HAS_AUDIT=0 ;;
+esac
+if [ "$REMOTE_HAS_AUDIT" = 1 ]; then
+	ok "the pushed branch carries the audit commit"
+else
+	bad "the pushed branch carries the audit commit"
 fi
 
 # clean: refuses a dirty worktree, then removes them all with --force.

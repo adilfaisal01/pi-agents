@@ -79,6 +79,22 @@ One fixture earned its keep twice: it wrote through a symlinked evidence file (`
 src/evidence/e1.txt`, then `printf >`), which rewrote `tests/run.sh` and was then caught by the *scope*
 check — a live demonstration of why the symlink refusal exists.
 
+### Follow-on: the PR is reviewed before it exists (2026-11-19, step 2)
+
+The forge's reviewer fired *after* `gh pr create` and its exit was swallowed, so a PR could be posted
+unreviewed. Here the whole-branch two-lane review is recorded **first** (`review --branch`), `finish`
+refuses while it is missing or has open SEV1/SEV2, and the review then appears three times: in the PR
+body, as a posted `gh pr comment`, and as a `review-posted` row. One renderer feeds body, comment and
+`report`. `review --branch --post` re-posts after a fix and refuses outright when no PR exists yet.
+
+63 fixtures (was 52), including an end-to-end `finish` against a bare remote with a stubbed `gh`.
+
+Two self-inflicted bugs found while building it, both worth remembering: replacing the
+`cmd_review`…`cmd_complete` span silently deleted the evidence helper that sat between them (the
+fixture caught it as "no task-complete row", not as a crash, because stderr was discarded), and
+`git log | grep -q` under `set -o pipefail` reports failure — `grep -q` exits early, `git` dies of
+SIGPIPE, `pipefail` propagates 141. Capture into a variable and match with `case`.
+
 **Still deferred:** LOCAL 7 (`scope` per dispatch on `subagent`). Without it a builder is not
 stopped from writing outside its task's scope *during* the run — it is caught at `complete`, which
 refuses the task and names the paths. That is later and coarser than a dispatch-time guard, but it is

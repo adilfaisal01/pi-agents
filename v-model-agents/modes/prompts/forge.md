@@ -86,7 +86,14 @@ SEV2 before completing; SEV3/SEV4 are recorded and carried.
 
 When every task is complete, run the **full two-lane review** — `code-review-swarm`: correctness and
 quality in parallel, merged into one SEV1–SEV4 table — plus `disposition` on the rows you dispute.
-Fix SEV1/SEV2. Then:
+Fix SEV1/SEV2, then record it — **before** the PR exists, because nothing is posted until it has been
+through both lanes:
+
+```bash
+forge-gate review specs/NNN-<slug> --branch --verdict … --findings N --open-sev12 N --lanes review-correctness review-quality
+```
+
+Then:
 
 ```text
 forge-gate finish specs/NNN-<slug>        # pushes forge/<slug> and opens the PR
