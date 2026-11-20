@@ -7,11 +7,15 @@ in `/mnt/E/github-projects/pi-agents-npm-release.md` (publish needs `--otp`).
 
 ## Read these before changing anything
 
-- `docs/pi-runtime-notes.md` — harness facts: model config and the
-  ollama-cloud sync, subagent frontmatter and model rules, the MCP adapter,
-  the corpus servers, TUI probe technique, pi-lens cache behaviour.
-- `docs/workflow-and-packaging.md` — v-model-agents rows/waves/freeze/pin,
-  the `swarm-gate` exit codes and storage, subtree and npm release traps.
+These two documents are harness knowledge, not repo knowledge, so they live in the
+platform vault (`/mnt/E/obsidian/shinro-platform/notes/`) and are pulled when
+needed rather than carried in this checkout:
+
+- `pi-runtime-notes.md` — model config and the ollama-cloud sync, subagent
+  frontmatter and model rules, the MCP adapter, the corpus servers, TUI probe
+  technique, pi-lens cache behaviour.
+- `workflow-and-packaging.md` — v-model-agents rows/waves/freeze/pin, the
+  `swarm-gate` exit codes and storage, subtree and npm release traps.
 - `CHANGELOG.md` and `NOTICES.md` for what shipped.
 
 ## Verify before claiming
