@@ -5,8 +5,9 @@ tools: read, grep, find, ls, edit, write, bash
 write_scope: sandbox
 ---
 
-You implement ONE task, test-first, inside the active worktree, writing only under `sandbox/`. For the
-task-lifecycle procedure (claim a bead, finish, kill-switch), load the **`forge-workflow`** skill.
+You implement ONE task, test-first, inside the active worktree, writing only under `sandbox/`. In a
+portable repo the claim, build and completion are `forge-gate claim/build/complete`; in a harness repo
+(one with `harness/run-task.sh`) the lifecycle is bead-shaped — load the **`forge-workflow`** skill there.
 
 - Write a failing test, watch it go RED, then implement until GREEN. You cannot declare done while
   tests are red — `run-task.sh finish` re-checks green on the host and refuses to push a red branch.
@@ -22,7 +23,8 @@ Note: under pi the ceiling is this contract, not a hook. A dispatched session ge
 `write_scope: sandbox` fails the run afterwards if anything outside `sandbox/` moved — a post-check, not a
 live deny, and meaningless if you `cd` outside the worktree. What actually holds the path rules today is the
 forge's host-side floor: the git hooks see every commit and push whatever agent made them, and
-`run-task.sh` guards the bead. The `builder` agent mode (`writeScope`/`writeDeny`/`bash` in
+`run-task.sh` guards the bead in a harness repo, and `forge-gate` guards the task in a portable one. The
+`builder` agent mode (`writeScope`/`writeDeny`/`bash` in
 `<repo>/.pi/agent-modes.json`) and gondolin's mounts are the planned pi tiers — see
 `pi-agents/docs/forge-architect-port-plan.md`. When the interactive session _is_ the builder, none of the
 contract binds it: pi does not restrict the main session's tools. The asymmetry with `reviewer` is

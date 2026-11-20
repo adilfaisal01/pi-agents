@@ -1,6 +1,6 @@
 ---
 name: decompose
-description: Turn a RATIFIED intake spec (post-Gate-A) into the machine-parseable Task Breakdown — tasks with binary DoD and measurable, tech-agnostic Success Criteria, plus the three machine fields (scope, dod_tests, sc_evidence) the mechanical gate enforces, traced to FR/stories, self-checked via the F8 adversarial coverage pass, then mechanically verified by the Gate-B analyze gate. Emits the spec's task block; does not mint beads.
+description: Turn a RATIFIED intake spec (post-Gate-A) into the machine-parseable Task Breakdown — tasks with binary DoD and measurable, tech-agnostic Success Criteria, plus the three machine fields (scope, dod_tests, sc_evidence) the mechanical gate enforces, traced to FR/stories, self-checked via the F8 adversarial coverage pass, then mechanically verified by `forge-gate analyze`. The block it emits is the only task ledger — nothing is minted elsewhere.
 ---
 
 # Decompose
@@ -8,20 +8,23 @@ description: Turn a RATIFIED intake spec (post-Gate-A) into the machine-parseabl
 > The **decompose** skill turns a ratified intake spec into the machine-parseable **Task Breakdown** —
 > a set of tasks, each with a binary Definition of Done and a measurable, technology-agnostic Success
 > Criterion, traced back to the requirements and stories that justify it. A thin reimplementation of
-> Spec Kit's planning step — _boilerplate, not framework_. It **emits the spec's task block; it does not
-> mint beads** — that boundary belongs to the deterministic converter (Stage 3.3 / cp-5).
+> Spec Kit's planning step — _boilerplate, not framework_. It **emits the spec's task block, and that
+> block is the ledger**: the `T00N` ids are what `forge-gate` claims, builds, reviews and completes
+> against, so there is no second id space and nothing is minted anywhere else.
 
 ## Purpose
 
 Decompose runs **after Gate-A ratification**: its input is the **human-validated FR set** — the human has
-signed `understanding.md` (`intake.sh ratify`), which binds a sha256 token to the projection of those FRs.
+signed `understanding.md` (`forge-gate ratify`, or `intake.sh ratify` in a harness repo), which binds a
+sha256 token to the projection of those FRs.
 Read the objective and the ratified spec (stories, FR-NNN, SC-NNN, Assumptions) and produce the
 `<!-- shinro:tasks:begin -->` JSON block defined in `templates/spec-template.md`, conforming exactly to
-its field schema and validation invariants. Stop at the spec — the converter mints beads later.
+its field schema and validation invariants. Stop at the spec: authoring the block is the end of your
+job, and `forge-gate` is what turns it into work.
 
 Because the token binds to the ratified content, the FR set is **frozen** while you decompose: if
 decomposition reveals the FRs themselves must change, do not silently edit them — the human re-opens via
-`intake.sh clarify` (which invalidates the token) and re-ratifies the new projection.
+`forge-gate` / `intake.sh clarify` (which invalidates the token) and re-ratifies the new projection.
 
 ## WHAT/WHY-not-HOW discipline
 
@@ -232,16 +235,17 @@ success criterion has an evidence path (`T002` covers both of its criteria).
 
 ## Output boundary and the enforcement seam
 
-- **Decompose stops at the spec.** It writes the task block into the spec and nothing else — it does not
-  call `bd`, does not mint beads, does not touch the ledger. Bead creation is the converter's job
-  (`intake.sh convert` — the minter lands at **Stage 3.3 / cp-5**; today it carries the Gate-A
-  ratification + anti-TOCTOU gate), and the exact bead-field mapping is gated on the locked `bd` probe
-  (see the _Bridge to `bd`_ section of `templates/spec-template.md`).
-- **Validation is the seam, not goodwill.** The emitted JSON is accepted only after `intake.sh analyze`
-  (**Gate B — wired, Stage 3.2 / cp-3; extended Stage 3.4 / cp-schema**) passes: the nine fail-loud
+- **Decompose stops at the spec.** It writes the task block into the spec and nothing else — it creates
+  no work items anywhere, keeps no side ledger, and touches no tracker. The `T00N` ids in the block are
+  the identity of the work from here on: `forge-gate claim/build/complete` record against them, one
+  append-only row at a time, and a task's history is the rows that name it. A second id space (a ticket
+  system, a minted hash, a board) would be one more thing an auditor has to reconcile with the spec, so
+  there is not one.
+- **Validation is the seam, not goodwill.** The emitted JSON is accepted only after `forge-gate analyze`
+  (`intake.sh analyze` in a harness repo) passes: the nine fail-loud
   invariants from `templates/spec-template.md` (well-formed unique ids; `depends_on` resolves and is
   acyclic; non-empty `satisfies`/DoD/SC; `priority` enum; `target_repo` ∈ `target_repos`; well-formed
   `scope` globs; syntactically-valid `dod_tests` selectors; bidirectional `sc_evidence` ↔
   `success_criteria`) plus **bidirectional FR↔task traceability** — every `satisfies` entry resolves
   to an FR/US defined in the prose, and every defined FR is covered by ≥ 1 task. Every rejection names
-  the offending id. Run F8, then analyze, before handing off.
+  the offending id. Run F8, then `forge-gate analyze`, before handing off.

@@ -358,6 +358,33 @@ else
 	bad "a malformed record line names its line number"
 fi
 
+
+echo
+echo "== no second ledger =="
+# The portable pipeline records against the spec's own T00N ids; there is no bead CLI, no minted id
+# and no converter. `forge-workflow` is the one file that documents the harness path, where beads
+# really are the ledger — it is excluded, and checked positively below so the exclusion cannot hide
+# a wholesale removal.
+SURFACE="$HERE/skills $HERE/agents $HERE/templates"
+hits=$(grep -rnE '(^|[^A-Za-z])bd([^A-Za-z]|$)|mint(ing|ed)?[ -]?bead' $SURFACE 2>/dev/null |
+	grep -v "forge-workflow/" || true)
+if [ -z "$hits" ]; then
+	ok "the shipped skills, agents and template name no bead CLI or mint step"
+else
+	bad "bead-CLI/mint language is back outside forge-workflow"
+	printf '%s\n' "$hits" | sed 's/^/        /'
+fi
+if grep -qi 'bead' "$HERE/skills/forge-workflow/SKILL.md"; then
+	ok "forge-workflow still documents the harness path (where beads are the ledger)"
+else
+	bad "forge-workflow lost its bead-lifecycle text"
+fi
+if grep -q 'Bridge to' "$HERE/templates/spec-template.md"; then
+	bad "the template points at a bead bridge that no longer exists"
+else
+	ok "the template has no dangling bead-bridge reference"
+fi
+
 echo
 if [ "$FAILED" -eq 0 ]; then
 	echo "forge-gate: every fixture behaved"
