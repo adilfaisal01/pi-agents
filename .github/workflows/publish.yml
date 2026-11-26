@@ -1,6 +1,16 @@
 name: publish
 
 # Publish @adilfaisal01/pi-agents to npm from CI.
+# INACTIVE: the tag trigger is gone.
+#
+# Distribution moved to a git tag — the install line is
+# `pi install git:github.com/adilfaisal01/pi-agents@vX.Y.Z` (see README). The
+# registry's OTP / trusted-publisher policy made every release a manual
+# ritual, and a tag does the same job without one. npm is frozen at 0.1.1.
+#
+# This file is kept, dispatch-only: the whole path is written and works again
+# the moment a granular NPM_TOKEN secret exists or the trusted publisher is
+# repaired.
 #
 # Auth, in order of preference:
 #   1. NPM_TOKEN secret — a granular token with "Bypass 2FA" ticked. Works
@@ -8,9 +18,7 @@ name: publish
 #      requires an interactive WebAuthn challenge for those), and bypass
 #      tokens lose direct publish around Jan 2027.
 #   2. otherwise: OIDC trusted publishing — npm exchanges the workflow's GitHub
-#      identity for a short-lived token, and records provenance (public repo +
-#      public package ⇒ attestations are automatic).
-# Set the secret to switch; leave it unset to stay on OIDC.
+#      identity for a short-lived token, and records provenance.
 #
 # One-time setup — npmjs.com → the package → Settings → Trusted publisher:
 #   provider  GitHub Actions
@@ -20,17 +28,12 @@ name: publish
 #   actions   "Allow npm publish"
 #             tick it — a config created after Sep 2026 is stage-only by default
 # The config expires if it does not complete a publish within 2 days, so have
-# the first tag push ready when you create it.
+# the first run ready when you create it.
 #
-# Usage: bump the version, commit, then tag and push. The tag must match
-# package.json. A version already on the registry is skipped, so re-running
-# a tag that published is a no-op rather than a failure:
-#   npm version patch && git push && git push --tags
+# A run must be dispatched against a tag, and the tag must match package.json.
+# A version already on the registry is skipped, so re-running is a no-op.
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
 
 permissions:

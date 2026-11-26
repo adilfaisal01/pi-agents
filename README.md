@@ -26,30 +26,31 @@ depends on where the checkout lives. Provenance and imported commits: [NOTICES.m
 
 ## Install
 
-### From npm
-
-The whole workspace ships as one package:
+### From git — the supported channel
 
 ```bash
-pi install npm:@adilfaisal01/pi-agents
+pi install git:github.com/adilfaisal01/pi-agents@v0.2.1
 ```
 
-That is both extensions (the modes and the `subagent` tool), both skills, the `/review`
-template, the two review lane agents, and the five forge skills with their four role
-contracts. The two shell tools come with it as `bin` entries:
+That is one package: both extensions (the modes and the `subagent` tool), both skills, the
+`/review` template, the two review lane agents, and the five forge skills with their four
+role contracts. It is cloned to
+`~/.pi/agent/git/github.com/adilfaisal01/pi-agents` and pinned to the tag — `pi update
+--extensions` reconciles the checkout but does not move a configured ref, so changing that
+number **is** the upgrade.
+
+The two shell tools live in that checkout. A git install puts nothing on `PATH`, so name
+the scripts:
 
 ```bash
-npx -y @adilfaisal01/pi-agents swarm-gate        # review the current change set
-npx -y @adilfaisal01/pi-agents review-lanes -h   # provision one lane's checkout
+~/.pi/agent/git/github.com/adilfaisal01/pi-agents/review-gate/bin/swarm-gate
+~/.pi/agent/git/github.com/adilfaisal01/pi-agents/review-lanes/bin/review-lanes -h
 ```
 
-The package carries the `pi-package` keyword, so it is eligible for the
-[Pi package gallery](https://pi.dev/packages).
-
-Two things worth knowing after an npm install:
+Two things worth knowing after an install:
 
 - **The model pins are files in the installed package** (under
-  `…/node_modules/@adilfaisal01/pi-agents/code-review-swarm/agents/`), and reinstalling
+  `…/git/github.com/adilfaisal01/pi-agents/code-review-swarm/agents/`), and moving the ref
   replaces them. For a change that survives an update, copy the two lane files into
   `~/.pi/agent/agents/`, edit them there — the `subagent` tool prefers user agents by name
   — and run `swarm-gate --agents ~/.pi/agent/agents`.
@@ -59,6 +60,14 @@ Two things worth knowing after an npm install:
   known limit, see `review-gate/BACKLOG.md`). `--dry-run` still plans the lanes without
   `pi`. **`review-lanes` needs `git` and `python3`** — it runs a Python snippet to assert
   where a package resolves from — and `uv` only for `--install`.
+
+### From npm — frozen at 0.1.1
+
+`npm:@adilfaisal01/pi-agents` still installs, at **0.1.1**, which is what the
+[Pi package gallery](https://pi.dev/packages) would list. Nothing newer goes there: the
+registry's OTP and trusted-publisher policy turned every release into a manual ritual, and
+a git tag does the same job without one. Treat npm as history; the tag above is the
+version this repo is at.
 
 ### From a checkout
 
