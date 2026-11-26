@@ -1,6 +1,6 @@
 {
   "name": "@adilfaisal01/pi-agents",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Per-mode capability profiles, a two-model code review with its gate, isolated subagent dispatch, and the shinro-forge architect workflow (skills + role contracts) — as one install.",
   "license": "MIT",
   "author": "Adil Faisal",
