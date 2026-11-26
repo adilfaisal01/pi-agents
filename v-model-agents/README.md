@@ -3,13 +3,18 @@
 Named modes with their own permissions: each one carries its own tool set, its own shell
 policy, its own write scope, its own system-prompt contract, and optionally its own model.
 
-| mode | writes | shell | what it is for |
-| --- | --- | --- | --- |
-| `oracle` | nothing in the repo | read-only + execute-class | reading, audits, evidence — the default for a fresh session |
-| `plan` | `docs/**` and `ledger.md` only | read-only + execute-class | producing a written plan, not a conversation |
-| `build` | source, never the test surface | unrestricted | implementing |
-| `yolo` | anything | unrestricted | experiments; not a delivery mode |
-| `forge` | anything but the machinery (`.claude`, `.codex`, `.agents`, `.pi`, `.github`, `.beads`, `.harness`, `harness`, `gate`) | unrestricted | autonomous task execution: claim, test-first, reviewed handoff — see [`forge-mode-plan.md`](../docs/forge-mode-plan.md) |
+| mode | writes | shell | remote | what it is for |
+| --- | --- | --- | --- | --- |
+| `oracle` | nothing in the repo | read-only + execute-class + `gh` reads | read | reading, audits, evidence — the default for a fresh session |
+| `plan` | `docs/**` and `ledger.md` only | read-only + execute-class + `gh` reads | read | producing a written plan, not a conversation |
+| `build` | source, never the test surface | unrestricted | read and write | implementing |
+| `yolo` | anything | unrestricted | read and write | experiments; not a delivery mode |
+| `forge` | anything but the machinery (`.claude`, `.codex`, `.agents`, `.pi`, `.github`, `.beads`, `.harness`, `harness`, `gate`) | unrestricted | read and write, push/PR only through `forge-gate finish` | autonomous task execution: claim, test-first, reviewed handoff — see [`forge-mode-plan.md`](../docs/forge-mode-plan.md) |
+
+`mcp__github` is in every mode's tool set and `gh`'s read subcommands are on the safe shell
+allowlist, so the remote is evidence rather than a separate trip to a browser. `oracle` and
+`plan` declare it read-only (`mcpReadOnly`), which the tool-call guard enforces by operation
+name — a PR's diff and a merge arrive through the same proxy tool.
 
 `alt+a` cycles, `Ctrl+1..5` jump, `Ctrl+Shift+M` toggles oracle ↔ build. `/mode` opens a
 menu, `--agent-mode <name>` starts a session already in one.
@@ -25,7 +30,7 @@ pi -e <this repo>          # try them for one session, no settings change
 
 Everything about the modes — the override layers, every `config.json` key, the keybinding
 map, and the limits of what a mode can enforce — is in **[`modes/README.md`](modes/README.md)**.
-Verify them with no model and no session: `./modes/check.sh` (tsc + 52 assertions).
+Verify them with no model and no session: `./modes/check.sh` (tsc + 119 assertions).
 
 ## Repo map
 

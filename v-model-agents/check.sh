@@ -3,7 +3,7 @@
 #
 #   ./check.sh
 #
-# The modes: typecheck + 38 assertions against the real extension, no pi needed.
+# The modes: typecheck + 119 assertions against the real extension, no pi needed.
 # The optional V-model material: the gate's own self-tests, driven by a stub lane runner.
 set -euo pipefail
 

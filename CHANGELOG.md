@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased]
+
+- **The remote is reachable from every mode, on terms each mode states.** All five modes now carry
+  `mcp__github` in their tool set, and the safe shell allowlist accepts `gh`'s read subcommands
+  (`gh pr view|list|diff|checks`, `gh issue view|list`, `gh run view|list`, `gh api` on a GET) — so a
+  PR's diff, an issue's text and a failed run's log are evidence a mode can read instead of
+  something it asks the user for. Writing the remote is separate: `oracle` and `plan` declare
+  `mcpReadOnly: ["github"]`, and the tool-call guard refuses any operation whose name is not a read
+  (`get_`/`list_`/`search_`), on the namespace proxy, on a direct `mcp__github__*` tool, and on an
+  `mcp`-gateway target resolved against the live registry — the bare `create_issue` and the
+  `github_create_issue` form are the same call as the canonical one. `gh`'s write subcommands and
+  `gh api`'s method/field flags are in the destructive list, so a read at the start of a line cannot
+  carry a write through behind it. The mode contract and the switch notice state the remote policy
+  alongside writes and shell; the selftest covers the allowed and refused command lists, the
+  operation guard in each shape, and that the shipped profile declares the policy per mode.
+
 ## [0.2.2] - 2026-11-26
 
 - **Distribution moved to a git tag.** `pi install git:github.com/adilfaisal01/pi-agents@vX.Y.Z`

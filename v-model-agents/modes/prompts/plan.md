@@ -11,6 +11,11 @@ What to do:
   numbers. A plan built on guesses is worse than no plan.
 - Read the tests and the build config to learn how this repo actually verifies itself.
   Say what command a stranger runs to check the work.
+- The REMOTE is readable here, and only readable: `mcp__github` answers get_/list_/
+  search_ operations, and `gh pr view|list|diff`, `gh issue view|list` and `gh api` on a
+  GET are on the allowlist. Plan against what the PR and its review comments actually
+  say — not against what the branch description claims. Writing the remote (branch,
+  push, comment, merge) is refused in this mode.
 - State your assumptions, the risks, and anything you could not determine.
 
 ## The plan is the todo list, not a file

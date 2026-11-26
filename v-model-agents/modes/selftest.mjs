@@ -44,6 +44,9 @@ function makePi(state) {
 		registerShortcut: (key, def) => shortcuts.set(key, def),
 		getFlag: () => state.flag ?? "",
 		getActiveTools: () => [...state.active],
+		// The live registry, as the adapter registers it: one namespace proxy per server
+		// plus the direct tool names the `mcp` gateway resolves a bare operation against.
+		getAllTools: () => [...(state.allTools ?? [])].map((name) => ({ name })),
 		setActiveTools: (tools) => {
 			state.active = [...tools];
 		},
@@ -119,6 +122,14 @@ const state = {
 	flag: "",
 	idle: true,
 	active: ["read", "bash", "edit", "write", "grep", "find", "ls", "memory_search", "mcp", "todo"],
+	allTools: [
+		"mcp__github",
+		"mcp__github__create_issue",
+		"mcp__github__get_pull_request",
+		"mcp__github__merge_pull_request",
+		"mcp__github__search_issues",
+		"mcp__vault__vault_read",
+	],
 	model: undefined,
 	entries: [],
 	messages: [],
@@ -157,6 +168,11 @@ const contract = firstRun.event.systemPromptOptions.sections["agent-mode"];
 ok("the mode contract is a tagged section", typeof contract === "string", JSON.stringify(firstRun.event.systemPromptOptions.sections));
 ok("the section states the write policy", String(contract).includes("read-only toward the repo"), String(contract));
 ok("the section states the shell policy", String(contract).includes("allowlist"), String(contract));
+ok(
+	"the section states the remote policy",
+	String(contract).includes("Remote: read-only on github"),
+	String(contract),
+);
 ok("the section leaves pi's own sections alone", firstRun.event.systemPromptOptions.sections.preamble === "base");
 ok("a fresh session says nothing in the conversation", state.messages.length === 0, JSON.stringify(state.messages));
 
@@ -245,6 +261,11 @@ ok(
 	String(toOracle?.content).includes("Writes: none"),
 	String(toOracle?.content),
 );
+ok(
+	"the notice says the remote became read-only",
+	String(toOracle?.content).includes("Remote: read-only on github"),
+	String(toOracle?.content),
+);
 state.idle = true;
 state.messages.length = 0;
 
@@ -290,12 +311,50 @@ for (const locked of ["tests/test_app.py", "pyproject.toml", "conftest.py"]) {
 }
 r = await call("edit", { path: "tests/nested/test_deep.py", oldText: "a", newText: "b" });
 ok("build refuses a new test file under a subdirectory", r?.block === true);
+// The remote guard is per mode: the same call oracle refuses is a build write.
+ok("build carries the github proxy", state.active.includes("mcp__github"), JSON.stringify(state.active));
+r = await call("mcp__github", { tool: "merge_pull_request", args: { pull_number: 12 } });
+ok("build writes the remote", r === undefined, String(r?.reason ?? ""));
 
 // Bash policy on the oracle-mode profile.
 await shortcuts.get("ctrl+1").handler(ctx); // oracle
 await tick();
-const allowed = ["rg -n value src/", "git log --oneline -3", "pytest tests/", "make test", "ruff check src/", "black --check ."];
-const refused = ["rm -rf src", "echo x > src/new.py", "cat a >> b", "git commit -am wip", "pip install numpy", "black .", "pytest --snapshot-update", "python3 scripts/gen_base.py"];
+const allowed = [
+	"rg -n value src/",
+	"git log --oneline -3",
+	"pytest tests/",
+	"make test",
+	"ruff check src/",
+	"black --check .",
+	// The remote on its read side: the CLI and the GET form of the API.
+	"gh pr view 12",
+	"gh pr diff 12",
+	"gh pr checks 12",
+	"gh issue list --state open",
+	"gh run view 99 --log-failed",
+	"gh api repos/o/r/pulls/12",
+	"gh auth status",
+];
+const refused = [
+	"rm -rf src",
+	"echo x > src/new.py",
+	"cat a >> b",
+	"git commit -am wip",
+	"pip install numpy",
+	"black .",
+	"pytest --snapshot-update",
+	"python3 scripts/gen_base.py",
+	// The remote on its write side, including the chained form: a read at the start of
+	// the line must not carry a write through behind it.
+	"gh pr merge 12",
+	"gh pr comment 12 --body hi",
+	"gh issue close 12",
+	"gh release create v1",
+	"gh repo clone owner/repo",
+	"gh api -X POST repos/o/r/issues",
+	"gh api repos/o/r/issues --field title=x",
+	"gh pr list && gh pr merge 12",
+];
 for (const cmd of allowed) {
 	r = await call("bash", { command: cmd });
 	ok(`allows: ${cmd}`, r === undefined, String(r?.reason ?? ""));
@@ -305,8 +364,66 @@ for (const cmd of refused) {
 	ok(`refuses: ${cmd}`, r?.block === true);
 }
 
+// --- the remote: readable in every mode, writable only where the mode allows --
+// The adapter exposes one namespace proxy per server, so the operation name is what
+// separates a PR's diff from a merge. Oracle declares github read-only.
+for (const proxy of ["mcp__github"]) {
+	r = await call(proxy, { tool: "get_pull_request", args: { pull_number: 12 } });
+	ok(`oracle reads the remote: ${proxy} get_*`, r === undefined, String(r?.reason ?? ""));
+	r = await call(proxy, { tool: "search_issues", args: { query: "is:open" } });
+	ok(`oracle reads the remote: ${proxy} search_*`, r === undefined, String(r?.reason ?? ""));
+	r = await call(proxy, { tool: "merge_pull_request", args: { pull_number: 12 } });
+	ok(`oracle refuses ${proxy} merge_*`, r?.block === true, String(r?.reason ?? ""));
+	ok("the remote refusal is not the frozen-test wording", !String(r?.reason).includes("frozen test surface"));
+}
+// A new write tool the regex has never seen is refused too: fail-closed, not
+// grandfathered in.
+r = await call("mcp__github", { tool: "upload_artifact", args: {} });
+ok("oracle refuses an operation no read verb names", r?.block === true, String(r?.reason ?? ""));
+// The direct-tool shape and the gateway's bare-name shape are the same call, so both
+// are gated against the registry.
+r = await call("mcp__github__create_issue", { owner: "o", repo: "r", title: "t" });
+ok("oracle refuses a direct github write tool", r?.block === true, String(r?.reason ?? ""));
+r = await call("mcp__github__get_pull_request", { pull_number: 12 });
+ok("oracle allows a direct github read tool", r === undefined, String(r?.reason ?? ""));
+r = await call("mcp", { tool: "create_issue", args: { owner: "o", repo: "r", title: "t" } });
+ok("oracle refuses a bare gateway write target", r?.block === true, String(r?.reason ?? ""));
+r = await call("mcp", { tool: "github_create_issue", args: { owner: "o", repo: "r", title: "t" } });
+ok("oracle refuses a server-prefixed gateway write target", r?.block === true, String(r?.reason ?? ""));
+r = await call("mcp", { tool: "get_pull_request", args: { pull_number: 12 } });
+ok("oracle allows a bare gateway read target", r === undefined, String(r?.reason ?? ""));
+// A server the mode does not restrict is untouched by the guard.
+r = await call("mcp__vault", { tool: "vault_read", args: { path: "x" } });
+ok("oracle leaves an unrestricted server alone", r === undefined, String(r?.reason ?? ""));
+
 // --- forge mode: autonomous work, but never its own machinery ----------------
 const forgeMode = JSON.parse(readFileSync(path.join(HERE, "config.json"), "utf8"));
+
+// The remote is reachable from every mode, and whether a mode may WRITE it is stated
+// per mode rather than inherited from whatever the session happened to have active.
+for (const name of forgeMode.order) {
+	const mode = forgeMode.modes[name];
+	ok(
+		`${name} carries the github proxy`,
+		Array.isArray(mode?.tools) && mode.tools.includes("mcp__github"),
+		JSON.stringify(mode?.tools),
+	);
+}
+for (const name of ["oracle", "plan"]) {
+	ok(
+		`${name} declares the remote read-only`,
+		(forgeMode.modes[name]?.mcpReadOnly ?? []).includes("github"),
+		JSON.stringify(forgeMode.modes[name]?.mcpReadOnly),
+	);
+}
+for (const name of ["build", "yolo", "forge"]) {
+	ok(
+		`${name} does not restrict the remote`,
+		(forgeMode.modes[name]?.mcpReadOnly ?? []).length === 0,
+		JSON.stringify(forgeMode.modes[name]?.mcpReadOnly),
+	);
+}
+
 ok("forge ships in the cycle order", forgeMode.order.includes("forge"), JSON.stringify(forgeMode.order));
 ok(
 	"forge ships a prompt contract",

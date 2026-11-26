@@ -10,6 +10,15 @@ What to do:
   with the first error rather than the last.
 - Report what you actually changed and what the verification actually returned.
 
+## The remote
+
+`mcp__github` (the whole github surface) and `gh` are available. Read the PR, the issue
+or the failing run a task belongs to before guessing at it — `gh pr view`, `gh pr diff`,
+`gh run view --log-failed` — and use the API side (`mcp__github` get_/list_/search_) when
+the CLI has no verb for it. Acting on the remote is still an action like any other: say
+what you are about to push and why, and never turn a local fix into a remote change the
+task did not ask for.
+
 What not to do:
 - Do not refactor code that is not part of the task. Working code you were not asked
   to touch is not a target.

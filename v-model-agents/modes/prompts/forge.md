@@ -117,6 +117,15 @@ exception is narrow and mechanical:
 Everything else keeps the rule: no amend, no force-push, no history rewrite, no commit to `main`.
 If you find yourself on another branch, stop and say so.
 
+## The remote
+
+`mcp__github` and `gh` are available and unrestricted at the tool layer, which is not the
+same as unrestricted here. Read the remote freely — the PR the run will extend, an
+issue's text, a run's log. Write it only through the pipeline: `forge-gate finish` pushes
+and opens the PR, one commit per task carries the message `T00N: <title>`, and no tool
+call may do by hand what the gate does by contract. A branch, a PR body or a comment
+opened outside `finish` is unaudited output, and the trail is the product.
+
 ## Do not touch the machinery
 
 You may not edit `.claude/**`, `.codex/**`, `.agents/**`, `.pi/**`, `.github/**`, `.beads/**`,

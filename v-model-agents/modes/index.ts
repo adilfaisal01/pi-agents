@@ -20,6 +20,10 @@
  *     leave a changed tracked file behind. Report-only: nothing is reverted.
  *   - a tool_call guard re-blocks writes in read-only modes as defense in depth, in
  *     case an injected instruction tries a tool that is no longer advertised.
+ *   - the remote is reachable from every mode: `mcp__github` is in every mode's tool
+ *     set, and oracle/plan list `github` in `mcpReadOnly`, so their calls into it are
+ *     refused at tool_call unless the operation is a read (get_/list_/search_). `gh`
+ *     joins the safe shell allowlist on its read subcommands only.
  *
  * Bindings:
  *   alt+a       cycle modes (forward)  — NOT Tab; Tab must stay autocomplete-accept
@@ -65,6 +69,14 @@ interface ModeConfig {
 	/** Repo-relative path prefixes this mode may never write (wins over writeScope). */
 	writeDeny?: string[];
 	/**
+	 * MCP servers this mode may only READ. A call through the server's namespace proxy
+	 * (`mcp__github`) or a direct tool (`mcp__github__create_issue`) is refused at
+	 * tool_call unless its operation starts with a read verb (see MCP_READ_VERBS).
+	 * Fail-closed: an operation no read verb names is treated as a write, so a write tool
+	 * a server ships tomorrow is refused without anyone editing this file.
+	 */
+	mcpReadOnly?: string[];
+	/**
 	 * Reason shown when `writeDeny` refuses a write. Defaults to the frozen-test-surface
 	 * wording, which is what the shipped `build` mode means by its deny list; a mode whose
 	 * deny list means something else (machinery, agent config, a vendored tree) sets its own
@@ -99,7 +111,8 @@ const DEFAULTS: Config = {
 			label: "oracle",
 			badge: "🔍 oracle",
 			color: "accent",
-			tools: ["read", "grep", "find", "ls", "todo", "bash"],
+			tools: ["read", "grep", "find", "ls", "todo", "bash", "mcp__github"],
+			mcpReadOnly: ["github"],
 			dropTools: ["edit", "write", "multiedit", "apply_patch"],
 			writeScope: [],
 			bash: "safe",
@@ -113,7 +126,8 @@ const DEFAULTS: Config = {
 			// whatever the transcript restored, so `plan` cannot rely on inheriting them.
 			// writeScope is what scopes them, and `todo` is in every mode because it is the
 			// ledger a plan is written to.
-			tools: ["read", "grep", "find", "ls", "edit", "write", "todo", "bash"],
+			tools: ["read", "grep", "find", "ls", "edit", "write", "todo", "bash", "mcp__github"],
+			mcpReadOnly: ["github"],
 			writeScope: ["docs"],
 			bash: "safe",
 			keepExtensions: true,
@@ -122,7 +136,7 @@ const DEFAULTS: Config = {
 			label: "build",
 			badge: "🔨 build",
 			color: "success",
-			tools: ["read", "grep", "find", "ls", "edit", "write", "todo", "bash"],
+			tools: ["read", "grep", "find", "ls", "edit", "write", "todo", "bash", "mcp__github"],
 			writeDeny: ["tests", "conftest.py", "pyproject.toml", "pytest.ini", "tox.ini", "setup.cfg"],
 			bash: "all",
 			keepExtensions: true,
@@ -131,7 +145,7 @@ const DEFAULTS: Config = {
 			label: "yolo",
 			badge: "⚡ yolo",
 			color: "error",
-			tools: ["read", "grep", "find", "ls", "edit", "write", "todo", "bash"],
+			tools: ["read", "grep", "find", "ls", "edit", "write", "todo", "bash", "mcp__github"],
 			bash: "all",
 			keepExtensions: true,
 		},
@@ -274,6 +288,94 @@ function shellPolicy(mode: ModeConfig): string {
 	return "unrestricted — a process it starts can write wherever it has permission to";
 }
 
+function remotePolicy(mode: ModeConfig): string {
+	const readOnly = (mode.mcpReadOnly ?? []).map(normalizeMcpServer);
+	if (readOnly.length === 0) return "read and write every MCP server this session has";
+	return `read-only on ${readOnly.join(", ")} — get_/list_/search_ operations, never create/push/merge`;
+}
+
+// ---------------------------------------------------------------------------
+// Remote (MCP) policy
+// ---------------------------------------------------------------------------
+
+/**
+ * Operation verbs a read-only mode may call into an MCP server with. Fail-closed on
+ * purpose: a server that grows a write tool after this regex was written is refused,
+ * not grandfathered in. `create_`, `update_`, `push_`, `merge_` and `delete_` all fail.
+ */
+const MCP_READ_VERBS = /^(get|list|search|read|view|describe|inspect|fetch|query|resolve)_/;
+
+interface McpTarget {
+	server: string;
+	op: string;
+}
+
+/** Server names reach a tool name with everything but [A-Za-z0-9_] folded to `_`. */
+function normalizeMcpServer(name: string): string {
+	return name.replace(/[^A-Za-z0-9_]/g, "_");
+}
+
+/**
+ * The (server, operation) pairs an MCP tool call may target. Every shape the adapter
+ * registers is covered: the namespace proxy `mcp__<server>` (the operation arrives as
+ * `input.tool`), a direct tool `mcp__<server>__<operation>`, and the `mcp` gateway — which
+ * accepts any of `mcp__<server>__<operation>`, `<server>_<operation>`, or the bare
+ * `<operation>`, and the bare form carries no server, so it is resolved against the live
+ * registry. Returns [] for a tool that is not an MCP call.
+ */
+function mcpTargets(toolName: string, input: unknown, registry: { name: string }[]): McpTarget[] {
+	const argument = String((input as { tool?: unknown } | undefined)?.tool ?? "");
+	if (toolName === "mcp") return argument ? gatewayTargets(argument, registry) : [];
+	if (!toolName.startsWith("mcp__")) return [];
+
+	const rest = toolName.slice("mcp__".length);
+	const sep = rest.indexOf("__");
+	if (sep < 0) return argument ? [{ server: normalizeMcpServer(rest), op: argument }] : [];
+	return [{ server: normalizeMcpServer(rest.slice(0, sep)), op: rest.slice(sep + 2) }];
+}
+
+/**
+ * A write-class call into a server this mode may only read, or undefined. Fail-closed —
+ * an operation MCP_READ_VERBS does not name as a read is treated as a write. The
+ * registry is a getter because resolving a bare gateway target is the only path that
+ * needs it, and a session without the adapter must not fail the guard.
+ */
+function readOnlyMcpWrite(
+	mode: ModeConfig,
+	toolName: string,
+	input: unknown,
+	registry: () => { name: string }[],
+): McpTarget | undefined {
+	const readOnlyServers = (mode.mcpReadOnly ?? []).map(normalizeMcpServer);
+	if (readOnlyServers.length === 0) return undefined;
+	return mcpTargets(toolName, input, registry()).find(
+		(target) => readOnlyServers.includes(target.server) && !MCP_READ_VERBS.test(target.op),
+	);
+}
+
+function gatewayTargets(argument: string, registry: { name: string }[]): McpTarget[] {
+	const targets: McpTarget[] = [];
+	const trimmed = argument.startsWith("mcp__") ? argument.slice("mcp__".length) : argument;
+	const sep = trimmed.indexOf("__");
+	if (sep > 0) {
+		targets.push({ server: normalizeMcpServer(trimmed.slice(0, sep)), op: trimmed.slice(sep + 2) });
+	}
+	for (const tool of registry) {
+		if (!tool.name.startsWith("mcp__")) continue;
+		const inner = tool.name.slice("mcp__".length);
+		const cut = inner.indexOf("__");
+		if (cut < 0) continue;
+		const server = inner.slice(0, cut);
+		const op = inner.slice(cut + 2);
+		// The gateway resolves a bare operation name and a `<server>_<operation>` name as
+		// readily as the canonical one; both are the same call, so both are gated.
+		if (argument === tool.name || argument === op || argument === `${server}_${op}`) {
+			targets.push({ server: normalizeMcpServer(server), op });
+		}
+	}
+	return targets;
+}
+
 // ---------------------------------------------------------------------------
 // Bash policy — default-deny read-only allowlist
 // ---------------------------------------------------------------------------
@@ -324,6 +426,15 @@ const DESTRUCTIVE_PATTERNS: RegExp[] = [
 	/^\s*cargo\s+fmt\b(?!\s+--check)/,
 	// Generators write source by convention; run them in a writing mode instead.
 	/\bgen_[a-z0-9_]+\.py\b/,
+	// GitHub CLI writes. The remote is readable in every mode, so its write side has to
+	// be named here rather than assumed to be absent: the anchor is the subcommand
+	// right after the command group, so `gh pr list --search review` stays a read while
+	// `gh pr merge 1` does not — and a chained `… && gh pr merge 1` is caught wherever it
+	// appears in the line.
+	/\bgh\s+(pr|issue|release|repo|gist|workflow|run|label|secret|variable|ruleset|alias|auth|extension|ssh-key|gpg-key|codespace|project)\s+(create|delete|edit|rename|merge|close|reopen|comment|review|ready|lock|unlock|transfer|archive|unarchive|fork|sync|clone|checkout|switch|disable|enable|dispatch|upload|download|pin|unpin|add|remove|set|clear|rerun|cancel|approve|import|login|logout|refresh|restore|setup-token)\b/i,
+	// `gh api` is a write the moment it carries a method or a field: `-X POST`,
+	// `--method=DELETE`, `-f query=…` (GraphQL mutations ride the field flag).
+	/\bgh\s+api\b[^|;&]*(\s(-X|--method)(\s|=)(POST|PUT|PATCH|DELETE)|\s(-f|-F|--field|--raw-field|--input)\b)/i,
 ];
 
 const SAFE_PATTERNS: RegExp[] = [
@@ -389,6 +500,14 @@ const SAFE_PATTERNS: RegExp[] = [
 	/^\s*zig\s+build\b/,
 	/^\s*go\s+(test|build|vet)\b/,
 	/^\s*(npm|pnpm|yarn)\s+(test|run\s+(test|lint|check|typecheck))\b/,
+	// The remote as evidence: a PR's diff, a run's log, an issue's text. Read
+	// subcommands only — the writes they mirror are in DESTRUCTIVE_PATTERNS above.
+	/^\s*gh\s+(pr|issue)\s+(view|list|diff|status|checks)\b/,
+	/^\s*gh\s+(run|workflow)\s+(view|list|watch)\b/,
+	/^\s*gh\s+(release|repo|label)\s+(view|list)\b/,
+	/^\s*gh\s+search\s+(repos|issues|prs|code|commits|users)\b/,
+	/^\s*gh\s+auth\s+status\b/,
+	/^\s*gh\s+api\b/,
 ];
 
 function isSafeCommand(command: string): boolean {
@@ -566,6 +685,7 @@ export default function agentModesExtension(pi: ExtensionAPI): void {
 		const state =
 			`Mode \`${name}\` is active right now. Writes: ${writePolicy(mode)}. ` +
 			`Shell: ${shellPolicy(mode)}. ` +
+			`Remote: ${remotePolicy(mode)}. ` +
 			`Active tools: ${pi.getActiveTools().join(", ")}.`;
 		return prompt ? `${prompt}\n\n${state}` : state;
 	}
@@ -612,6 +732,7 @@ export default function agentModesExtension(pi: ExtensionAPI): void {
 			"This supersedes anything earlier in this conversation about what you may do.",
 			`- Writes: ${writePolicy(mode)}`,
 			`- Shell: ${shellPolicy(mode)}`,
+			`- Remote: ${remotePolicy(mode)}`,
 		];
 		if (dropped.length) lines.push(`- Tools removed: ${dropped.join(", ")}`);
 		if (gained.length) lines.push(`- Tools added: ${gained.join(", ")}`);
@@ -909,6 +1030,15 @@ export default function agentModesExtension(pi: ExtensionAPI): void {
 	// --- enforcement --------------------------------------------------------
 	const WRITE_TOOLS = new Set(["edit", "write", "multiedit", "apply_patch"]);
 
+	/** The live registry, for resolving a bare gateway target to its server. Never throws. */
+	function safeGetAllTools(): { name: string }[] {
+		try {
+			return pi.getAllTools() ?? [];
+		} catch {
+			return [];
+		}
+	}
+
 	/** Repo-relative, forward-slashed path for a tool's file argument; undefined if outside the tree. */
 	function relPath(raw: string): string | undefined {
 		if (!raw.trim()) return undefined;
@@ -965,6 +1095,20 @@ export default function agentModesExtension(pi: ExtensionAPI): void {
 								`A test changes only by a recorded amendment; a build lane never edits one.`),
 				);
 			}
+		}
+
+		// A server a read-only mode may only read is gated by operation name, because the
+		// adapter exposes one namespace proxy per server rather than one tool per
+		// operation: removing the proxy would remove the reads too, so the guard is what
+		// separates a PR's diff from a merge.
+		const remoteWrite = readOnlyMcpWrite(mode, event.toolName, event.input, safeGetAllTools);
+		if (remoteWrite) {
+			return refuse(
+				mode,
+				`refused: '${remoteWrite.op || "(unnamed)"}' on ${remoteWrite.server} writes to the remote — ` +
+					`this mode reads ${(mode.mcpReadOnly ?? []).join(", ")}; it does not create, push, comment or merge.`,
+				`Reads are get_/list_/search_ operations. Writing the remote is a write mode's job.`,
+			);
 		}
 
 		if (event.toolName !== "bash") return;

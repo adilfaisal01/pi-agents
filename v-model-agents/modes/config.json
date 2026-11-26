@@ -19,7 +19,11 @@
         "find",
         "ls",
         "todo",
-        "bash"
+        "bash",
+        "mcp__github"
+      ],
+      "mcpReadOnly": [
+        "github"
       ],
       "dropTools": [
         "edit",
@@ -44,7 +48,11 @@
         "bash",
         "edit",
         "write",
-        "todo"
+        "todo",
+        "mcp__github"
+      ],
+      "mcpReadOnly": [
+        "github"
       ],
       "writeScope": [
         "docs"
@@ -65,7 +73,8 @@
         "edit",
         "write",
         "todo",
-        "bash"
+        "bash",
+        "mcp__github"
       ],
       "writeDeny": [
         "tests",
@@ -91,7 +100,8 @@
         "edit",
         "write",
         "todo",
-        "bash"
+        "bash",
+        "mcp__github"
       ],
       "bash": "all",
       "keepExtensions": true,
@@ -110,7 +120,8 @@
         "write",
         "subagent",
         "todo",
-        "bash"
+        "bash",
+        "mcp__github"
       ],
       "writeDeny": [
         ".claude",

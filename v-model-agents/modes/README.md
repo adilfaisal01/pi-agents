@@ -35,13 +35,18 @@ what you do in them.
 
 ## The modes
 
-| mode | writes | shell | what it is for |
-| --- | --- | --- | --- |
-| `oracle` | nothing in the repo | read-only + execute-class | reading, audits, evidence — the default for a fresh session |
-| `plan` | `docs/**` only — the plan itself is the `todo` list | read-only + execute-class | producing a plan as dated todo items, not a prose answer |
-| `build` | source, never the test surface | unrestricted | implementing |
-| `yolo` | anything | unrestricted | experiments; not a delivery mode |
-| `forge` | anything but the machinery | unrestricted | autonomous task execution — claim, test-first, reviewed handoff |
+| mode | writes | shell | remote | what it is for |
+| --- | --- | --- | --- | --- |
+| `oracle` | nothing in the repo | read-only + execute-class + `gh` reads | read | reading, audits, evidence — the default for a fresh session |
+| `plan` | `docs/**` only — the plan itself is the `todo` list | read-only + execute-class + `gh` reads | read | producing a plan as dated todo items, not a prose answer |
+| `build` | source, never the test surface | unrestricted | read and write | implementing |
+| `yolo` | anything | unrestricted | read and write | experiments; not a delivery mode |
+| `forge` | anything but the machinery | unrestricted | read and write, push/PR only through `forge-gate finish` | autonomous task execution — claim, test-first, reviewed handoff |
+
+The remote is part of every mode's tool set: `mcp__github` (one namespace proxy per server,
+so the operation name is what the guard sees) plus the `gh` CLI on the read subcommands of a
+read-only shell. A mode that may only read it declares `mcpReadOnly: ["github"]` and the
+tool-call guard refuses create/push/comment/merge by operation name.
 
 Keys: `alt+a` cycles, `Ctrl+1..5` jump straight to a mode, `Ctrl+Shift+M` toggles
 oracle ↔ build. (Not `Tab` — that must stay autocomplete-accept.) Commands: `/mode` opens
@@ -126,7 +131,8 @@ id is not available in your install, the switch is kept and a warning says where
 | --- | --- | --- |
 | tool presence | `dropTools` / `tools` → `setActiveTools` | a model can't call a tool absent from its schema |
 | write scope | `writeScope` / `writeDeny` on `write`/`edit` `input.path` | prompt injection naming a path |
-| shell policy | `bash: none\|safe\|all` + read-only allowlist | "just run the tests" in a read-only mode |
+| shell policy | `bash: none\|safe\|all` + read-only allowlist (the `gh` read subcommands included) | "just run the tests" in a read-only mode |
+| remote writes | `mcpReadOnly` → `tool_call` on the namespace proxy, the direct tool, or a resolved `mcp` gateway target | a write the proxy also carries — the guard is what separates reading a PR's diff from merging it |
 | model per mode | `model` in the mode, applied on switch | forgetting to switch models too |
 | prompt contract | `prompts/<mode>.md` in the `<agent-mode>` system-prompt section | (advisory; keep it aligned with the rest) |
 | switch notice | a `customType: "agent-modes"` message stating the new permissions and the tools gained/lost | (advisory; but a model that ignores it walks into a refusal) |
@@ -175,7 +181,8 @@ Keys per mode:
 | `writeScope` | repo-relative path prefixes it may write; `[]` = none, omitted = any |
 | `writeDeny` | prefixes it may never write, even inside `writeScope` |
 | `writeDenyReason` | the sentence shown when `writeDeny` refuses a write; defaults to the frozen-test-surface wording, so a mode whose deny list means something else (machinery, agent config) says what it actually protects |
-| `bash` | `none`, `safe` (read-only + execute-class allowlist), `all` |
+| `bash` | `none`, `safe` (read-only + execute-class allowlist, `gh` reads included), `all` |
+| `mcpReadOnly` | MCP servers this mode may only read. A call is refused unless its operation starts with `get_`/`list_`/`search_`/`read_`/`view_`/`describe_`/`inspect_` — fail-closed, so a write tool a server gains later is refused without editing this file |
 | `keepExtensions` | keep whatever tools were already active (extension tools included) |
 | `promptFile` | the mode's contract, published in the `<agent-mode>` system-prompt section |
 
@@ -210,6 +217,13 @@ precedence, and the drift audit end to end.
 - **`keepExtensions: true` includes every extension tool**, including ones that write (a
   skill manager, an MCP filesystem server). Set `keepExtensions: false` if that matters
   more than context.
+- **A read-only MCP server is a guard on an operation name, not an absent capability.**
+  `mcpReadOnly` refuses the call at `tool_call`; the proxy still carries the server's whole
+  surface, so what holds is the guard, exactly as for any extension tool. The `mcp` gateway
+  is resolved against the live registry, which catches the bare (`create_issue`) and
+  server-prefixed (`github_create_issue`) forms as well as the canonical one — but a target
+  that names no registered tool cannot be resolved, so it is not gated. Calling the server's
+  own proxy (`mcp__github`) keeps the operation visible to the guard.
 - **A mode is not a sandbox.** It cannot stop a process the model starts from writing
   wherever that process has permission to write, and it does not confine the session to a
   directory. It is a capability profile for the tools pi itself mediates.
