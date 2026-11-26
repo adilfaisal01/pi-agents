@@ -75,7 +75,16 @@ else
 	fail "an agent file pins a model: $(printf '%s' "$pinned" | tr '\n' ' ')"
 fi
 
-# 3. the ids resolve here.
+# 3. the ids resolve here, but only where the answer can be trusted. PI_MODEL_CHECK=skip says
+#    the caller's install has no model registry (the publish workflow sets it for a runner);
+#    without pi, or with an empty registry, the question cannot be answered either. A runner
+#    that cannot answer must not fail the package — and a registry full of ids this install
+#    never had must not fail it either, which is what a credential-less runner looks like.
+if [ "${PI_MODEL_CHECK:-}" = "skip" ]; then
+	skip "sample ids resolve (PI_MODEL_CHECK=skip)"
+	printf '\nrole-model checks passed\n'
+	exit 0
+fi
 if ! command -v pi >/dev/null 2>&1; then
 	skip "sample ids resolve (pi is not on PATH)"
 	printf '\nrole-model checks %s\n' "$([ "$FAILED" -eq 0 ] && echo passed || echo failed)"

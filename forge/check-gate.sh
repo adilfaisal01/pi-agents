@@ -49,7 +49,7 @@ expect_analyze() {
 # --- a throwaway repo, with the branch forge mode is allowed to commit on ---
 mkdir -p "$WORK/repo"
 cd "$WORK/repo" || exit 2
-git init -q .
+git init -q -b main .
 git config user.email t@example.invalid
 git config user.name "fixture"
 git config commit.gpgsign false
