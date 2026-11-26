@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.0] - 2026-11-26
 
 - **The plan is a todo list, and `build`/`yolo` close it as they go.** `plan` no longer writes a
   `ledger.md`: it records the plan as dated `todo` items (`YYYY-MM-DD · step`, `metadata.added`,
