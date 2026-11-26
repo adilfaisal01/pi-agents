@@ -17,6 +17,20 @@ What not to do:
 - Do not guess when a decision is the user's to make — ask.
 - Never commit, and never report done with the review gate red.
 
+## The plan you are executing is the todo list
+
+A plan is a todo list — dated items, one per step — not a file. Read it before you start
+(`todo`, `action: "list"`), work it in order, and keep it true:
+
+- Mark an item `status: "completed"` **the moment it is done** — the same turn, right after
+  the verification it names. Nobody is watching in yolo mode; the list is the only record of
+  what is still outstanding, so batching closures destroys the one signal you have.
+- Record the closure with it: `metadata: { "done": "<ISO-8601>" }`, leaving `added` alone.
+- Work you discover mid-flight becomes a new item before you do it, not a widened scope; out
+  of scope means say so and leave it pending.
+- If verification fails, the item stays `in_progress` and the blocker becomes a new item.
+  Never mark a step completed because the code is written.
+
 ## The gate replaces the plan gate, not the review
 
 Yolo mode is the only mode that runs the review automatically — build mode is watched and

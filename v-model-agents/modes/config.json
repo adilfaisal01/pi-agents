@@ -11,13 +11,14 @@
   "modes": {
     "oracle": {
       "label": "oracle",
-      "badge": "🔍 oracle",
+      "badge": "\ud83d\udd0d oracle",
       "color": "accent",
       "tools": [
         "read",
         "grep",
         "find",
         "ls",
+        "todo",
         "bash"
       ],
       "dropTools": [
@@ -33,18 +34,20 @@
     },
     "plan": {
       "label": "plan",
-      "badge": "📋 plan",
+      "badge": "\ud83d\udccb plan",
       "color": "warning",
       "tools": [
         "read",
         "grep",
         "find",
         "ls",
-        "bash"
+        "bash",
+        "edit",
+        "write",
+        "todo"
       ],
       "writeScope": [
-        "docs",
-        "ledger.md"
+        "docs"
       ],
       "bash": "safe",
       "keepExtensions": true,
@@ -52,7 +55,7 @@
     },
     "build": {
       "label": "build",
-      "badge": "🔨 build",
+      "badge": "\ud83d\udd28 build",
       "color": "success",
       "tools": [
         "read",
@@ -61,6 +64,7 @@
         "ls",
         "edit",
         "write",
+        "todo",
         "bash"
       ],
       "writeDeny": [
@@ -77,7 +81,7 @@
     },
     "yolo": {
       "label": "yolo",
-      "badge": "⚡ yolo",
+      "badge": "\u26a1 yolo",
       "color": "error",
       "tools": [
         "read",
@@ -86,6 +90,7 @@
         "ls",
         "edit",
         "write",
+        "todo",
         "bash"
       ],
       "bash": "all",
@@ -94,7 +99,7 @@
     },
     "forge": {
       "label": "forge",
-      "badge": "⚒️ forge",
+      "badge": "\u2692\ufe0f forge",
       "color": "success",
       "tools": [
         "read",
@@ -104,6 +109,7 @@
         "edit",
         "write",
         "subagent",
+        "todo",
         "bash"
       ],
       "writeDeny": [
@@ -117,7 +123,7 @@
         "harness",
         "gate"
       ],
-      "writeDenyReason": "this mode may not edit the forge machinery (.claude, .codex, .agents, .pi, .github, .beads, .harness, harness, gate) — those trees are the floors that watch the agent. Say what the change is and why, and leave it to the human.",
+      "writeDenyReason": "this mode may not edit the forge machinery (.claude, .codex, .agents, .pi, .github, .beads, .harness, harness, gate) \u2014 those trees are the floors that watch the agent. Say what the change is and why, and leave it to the human.",
       "bash": "all",
       "keepExtensions": true,
       "promptFile": "prompts/forge.md"

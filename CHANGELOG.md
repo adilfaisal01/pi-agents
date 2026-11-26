@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+- **The plan is a todo list, and `build`/`yolo` close it as they go.** `plan` no longer writes a
+  `ledger.md`: it records the plan as dated `todo` items (`YYYY-MM-DD · step`, `metadata.added`,
+  the check in `description`), and the executing modes mark each item `status: completed` in the
+  same turn as the verification it names, with `metadata.done` set. `plan.writeScope` drops
+  `ledger.md` and keeps `docs/**` for a durable artifact the list cannot carry; `todo` is now
+  listed in every mode's `tools` so the ledger survives a switch.
+- **A mode switch now tells the model it happened.** `v-model-agents/modes` used to return a whole
+  replacement `systemPrompt` on every run. Pi treats that as a forced prompt: every provider pays a
+  full cache miss on each switch, and the projection drops every other system message —
+  `toolsRemoved` included — so entering `oracle` silently deleted `edit`/`write` from the schema
+  without ever saying so. The contract is now the tagged `<agent-mode>` section, which pi diffs and
+  patches in place, and a switch additionally writes one `agent-modes` message naming the write and
+  shell policy it just gained or lost, the tools added/removed, and the fact that the model's
+  earlier claims about its permissions are superseded (`steer` mid-run, immediate when idle, so no
+  turn is bought). Refusals now point at the real cycle key instead of a `Tab` binding that does
+  not exist, and `DEFAULTS.cycleKey` no longer disagrees with the shipped `alt+a`. Verified against
+  pi 1.6.0: a build→oracle switch persists `sections: [tools, rules, agent-mode]` with
+  `toolsRemoved: [edit, write]` rather than a replaced prompt, and a resume that lands in a
+  different mode than the transcript last knew announces itself as a restore. Switches are
+  serialized, so a slow `pi.setModel` can no longer let an earlier switch's model land after a
+  later switch's. `plan`'s contract no longer claims edit/write are removed (they are scoped,
+  and its own in-scope writes work).
+
 - **The shinro-forge architect workflow ships with the package** (`forge/`): the `clarify`,
   `spec-authoring`, `decompose`, `forge-review` and `forge-workflow` skills on `pi.skills`, and
   the `architect` / `builder` / `spec-reviewer` / `disposition` role contracts on `pi.agents`.

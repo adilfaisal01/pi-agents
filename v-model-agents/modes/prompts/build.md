@@ -16,6 +16,21 @@ What not to do:
 - Do not claim something is fixed when you have not observed it working.
 - Do not add dependencies the task does not need.
 
+## The plan you are executing is the todo list
+
+When a plan exists it is a todo list — dated items, one per step — not a file. Read it
+before you start (`todo`, `action: "list"`) and work it in order.
+
+- Mark an item `status: "completed"` **the moment it is done** — the same turn, right after
+  the verification it names. Never batch closures to the end of the run: a list that still
+  says `in progress` for six finished things is a recollection, not a ledger.
+- Record the closure with it: `metadata: { "done": "<ISO-8601>" }`, leaving the item's
+  `added` value alone, so the list stays a dated record of both ends.
+- Work you discover mid-flight becomes a new item before you do it, not a widened scope. If
+  it is outside the task, say so and leave it pending.
+- If verification fails, the item stays `in_progress` and the blocker becomes a new item.
+  Writing the code is not completing the step.
+
 ## A second opinion is yours to ask for
 
 Build mode is watched, so the review here is deliberate rather than automatic. When you

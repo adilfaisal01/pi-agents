@@ -4,7 +4,7 @@
  * A per-mode agent switcher: each mode carries its own tool set, its own shell
  * policy, its own system-prompt contract, and (optionally) its own MODEL. This is
  * the piece pi core leaves out — pi has no named-agent concept, so modes here are
- * implemented as tool-schema + prompt + model state.
+ * implemented as tool-schema + a tagged system-prompt section + model state.
  *
  * Enforcement is structural where it can be:
  *   - oracle removes edit+write from the active tool set (dropTools), so they are
@@ -87,15 +87,19 @@ interface Config {
 }
 
 const DEFAULTS: Config = {
-	cycleKey: "tab",
+	cycleKey: "alt+a",
 	default: "oracle",
 	order: ["oracle", "plan", "build", "yolo"],
+	// These entries are a FALLBACK for a missing or unreadable config.json; the shipped
+	// profile is config.json, which `loadConfig` layers on top whenever it loads. Keep the
+	// two in step — they had already drifted (plan's writeScope, build's deny list) — and
+	// treat config.json as the file to edit.
 	modes: {
 		oracle: {
 			label: "oracle",
 			badge: "🔍 oracle",
 			color: "accent",
-			tools: ["read", "grep", "find", "ls", "bash"],
+			tools: ["read", "grep", "find", "ls", "todo", "bash"],
 			dropTools: ["edit", "write", "multiedit", "apply_patch"],
 			writeScope: [],
 			bash: "safe",
@@ -105,8 +109,12 @@ const DEFAULTS: Config = {
 			label: "plan",
 			badge: "📋 plan",
 			color: "warning",
-			tools: ["read", "grep", "find", "ls", "bash"],
-			writeScope: ["docs", "ledger"],
+			// edit/write are listed deliberately: a resumed session's base tool set is
+			// whatever the transcript restored, so `plan` cannot rely on inheriting them.
+			// writeScope is what scopes them, and `todo` is in every mode because it is the
+			// ledger a plan is written to.
+			tools: ["read", "grep", "find", "ls", "edit", "write", "todo", "bash"],
+			writeScope: ["docs"],
 			bash: "safe",
 			keepExtensions: true,
 		},
@@ -114,8 +122,8 @@ const DEFAULTS: Config = {
 			label: "build",
 			badge: "🔨 build",
 			color: "success",
-			tools: ["read", "grep", "find", "ls", "edit", "write", "bash"],
-			writeDeny: ["tests", "conftest.py", "pyproject.toml", "pytest.ini", "tox.ini", "setup.cfg", "gate/run-tests.sh"],
+			tools: ["read", "grep", "find", "ls", "edit", "write", "todo", "bash"],
+			writeDeny: ["tests", "conftest.py", "pyproject.toml", "pytest.ini", "tox.ini", "setup.cfg"],
 			bash: "all",
 			keepExtensions: true,
 		},
@@ -123,7 +131,7 @@ const DEFAULTS: Config = {
 			label: "yolo",
 			badge: "⚡ yolo",
 			color: "error",
-			tools: ["read", "grep", "find", "ls", "edit", "write", "bash"],
+			tools: ["read", "grep", "find", "ls", "edit", "write", "todo", "bash"],
 			bash: "all",
 			keepExtensions: true,
 		},
@@ -232,6 +240,38 @@ function loadPrompt(dir: string, mode: ModeConfig): string {
 	} catch {
 		return "";
 	}
+}
+
+/**
+ * Tag name of the system-prompt section carrying the mode contract. It becomes
+ * `<agent-mode>…</agent-mode>` in the prompt, so the model can match a later
+ * patch to the section it replaces.
+ */
+const SECTION_TAG = "agent-mode";
+
+/**
+ * The mode's write permission stated as a sentence. Used both in the prompt
+ * contract and in the switch notice, so the two can never drift: a model that
+ * is told its permissions twice had better be told the same thing twice.
+ */
+function writePolicy(mode: ModeConfig): string {
+	const deny = mode.writeDeny?.length ? mode.writeDeny.join(", ") : undefined;
+	const scope = mode.writeScope;
+	if (scope !== undefined && scope.length === 0) {
+		return deny
+			? `none — this mode is read-only toward the repo, and never writes ${deny}`
+			: "none — this mode is read-only toward the repo";
+	}
+	if (scope !== undefined) {
+		return deny ? `only ${scope.join(", ")} and never ${deny}` : `only ${scope.join(", ")}`;
+	}
+	return deny ? `anywhere in the repo except ${deny}` : "anywhere in the repo";
+}
+
+function shellPolicy(mode: ModeConfig): string {
+	if (mode.bash === "none") return "unavailable";
+	if (mode.bash === "safe") return "a read-only allowlist; anything else is refused, not run";
+	return "unrestricted — a process it starts can write wherever it has permission to";
 }
 
 // ---------------------------------------------------------------------------
@@ -488,9 +528,112 @@ export default function agentModesExtension(pi: ExtensionAPI): void {
 		ctx.ui.setStatus("agent-modes", ctx.ui.theme.fg(color as never, badge));
 	}
 
+	/**
+	 * One phrasing for "this mode will not do that", used by every refusal. The model
+	 * cannot press a key, so the hint has to say who can and how — and the same way
+	 * every time, or the escape hatch looks mode-dependent.
+	 */
+	function modeEscape(): string {
+		return `${config.cycleKey}, or /mode <name>`;
+	}
+
+	/**
+	 * One refusal shape, so the escape hatch is worded identically wherever a guard
+	 * fires. `tail` is the mode's own reason; `extra` carries something the model
+	 * needs (the command, an example) that would break the sentence.
+	 */
+	function refuse(mode: ModeConfig, tail: string, extra?: string): { block: true; reason: string } {
+		return {
+			block: true,
+			reason:
+				`[${mode.label}] ${tail} ` +
+				`Ask the user to switch modes (${modeEscape()}) if this is wanted.` +
+				(extra ? `\n${extra}` : ""),
+		};
+	}
+
 	function notify(ctx: ExtensionContext, message: string, type?: "info" | "warning" | "error"): void {
 		if (!ctx.hasUI) return;
 		ctx.ui.notify(message, type ?? "info");
+	}
+
+	/**
+	 * The mode's prompt contract plus the live state line, rendered as one string.
+	 * This is the body of the `<agent-mode>` system-prompt section.
+	 */
+	function modeContract(name: string, mode: ModeConfig): string {
+		const prompt = prompts.get(name) ?? "";
+		const state =
+			`Mode \`${name}\` is active right now. Writes: ${writePolicy(mode)}. ` +
+			`Shell: ${shellPolicy(mode)}. ` +
+			`Active tools: ${pi.getActiveTools().join(", ")}.`;
+		return prompt ? `${prompt}\n\n${state}` : state;
+	}
+
+	/**
+	 * Announce a mode switch in the conversation itself.
+	 *
+	 * Enforcement lives in the tool schema and the guards, but neither tells the
+	 * model that it changed: the transcript keeps the model's own earlier claims
+	 * ("I'll write the file") while the tools those claims needed have silently
+	 * gone, and a refusal then reads as a bug rather than as a new rule. This
+	 * message is the missing half — what just changed, in the mode's own terms.
+	 *
+	 * `steer` mid-run because the new tool set is already live for the next
+	 * request; when idle a plain message, which persists at once and starts no
+	 * turn, so pressing a key never buys a model turn to acknowledge it.
+	 *
+	 * `toolsAfter` is passed in rather than read back from pi: a second switch can
+	 * land inside this one's model swap, and this notice must describe the change
+	 * it was asked about, not whatever is live by the time it is written.
+	 */
+	function announceSwitch(event: {
+		from: string;
+		to: string;
+		toolsBefore: string[];
+		toolsAfter: string[];
+		appliedModel: string | undefined;
+		/** True when this process did not perform the switch: a resume landed in a new mode. */
+		restored: boolean;
+		/** Whether a run was in flight when the switch was made, not when the notice is written. */
+		idle: boolean;
+	}): void {
+		const { from, to, toolsBefore, toolsAfter, appliedModel, restored, idle } = event;
+		const mode = config.modes[to];
+		if (!mode) return;
+
+		const dropped = toolsBefore.filter((t) => !toolsAfter.includes(t));
+		const gained = toolsAfter.filter((t) => !toolsBefore.includes(t));
+
+		const lines = [
+			restored
+				? `Mode restored: this session resumes in \`${to}\`, and was last in \`${from}\`. The permissions below apply from here.`
+				: `Permission change: mode \`${from}\` → \`${to}\`.` ,
+			"This supersedes anything earlier in this conversation about what you may do.",
+			`- Writes: ${writePolicy(mode)}`,
+			`- Shell: ${shellPolicy(mode)}`,
+		];
+		if (dropped.length) lines.push(`- Tools removed: ${dropped.join(", ")}`);
+		if (gained.length) lines.push(`- Tools added: ${gained.join(", ")}`);
+		if (appliedModel) lines.push(`- Model: ${appliedModel}`);
+		lines.push(
+			"Work the previous mode allowed may now be refused. Do not retry a refused call — " +
+				`say what it needs and let the user switch modes (${modeEscape()}).`,
+		);
+
+		// Idle: no options. `deliverAs: "nextTurn"` would only queue it in memory
+		// until the next prompt, so a switch followed by `/exit` would lose the
+		// record of what the model was told. A plain sendMessage appends to the
+		// transcript at once and still starts no turn of its own.
+		pi.sendMessage(
+			{
+				customType: "agent-modes",
+				content: lines.join("\n"),
+				display: true,
+				details: { from, to, appliedModel, restored },
+			},
+			idle ? undefined : { deliverAs: "steer" },
+		);
 	}
 
 	async function applyModel(name: string, ctx: ExtensionContext): Promise<string | undefined> {
@@ -579,10 +722,35 @@ export default function agentModesExtension(pi: ExtensionAPI): void {
 		pi.appendEntry("agent-modes", { mode: current });
 	}
 
-	async function setMode(
+	/**
+	 * Switches run one at a time.
+	 *
+	 * `applyModel` awaits `pi.setModel`, which resolves only once the provider swap
+	 * has landed. Two keystrokes inside that window used to interleave: the tool
+	 * sets, entries and notices of two modes mixed, and the *later-resolving* swap
+	 * won the model while the later switch owned the mode — leaving the session on
+	 * a model the active mode never asked for, with a notice that said otherwise.
+	 * Serializing makes "the last switch is the truth" true by construction.
+	 */
+	let switchQueue: Promise<void> = Promise.resolve();
+	/**
+	 * The last mode a caller asked for, recorded synchronously because `current` only
+	 * moves once the queued switch runs. Key repeats arrive as one stdin chunk and pi
+	 * dispatches them synchronously, so two `alt+a` presses in a burst would both
+	 * compute "the next mode" from a `current` neither of them has changed yet and
+	 * land on the same mode — advancing one step for two presses.
+	 */
+	let requestedMode: string | undefined;
+
+	/** The mode the user is heading for: the queued one if a switch is pending. */
+	function intendedMode(): string | undefined {
+		return requestedMode ?? current;
+	}
+
+	function setMode(
 		name: string,
 		ctx: ExtensionContext,
-		opts?: { quiet?: boolean },
+		opts?: { quiet?: boolean; from?: string },
 	): Promise<void> {
 		const mode = config.modes[name];
 		if (!mode) {
@@ -590,19 +758,75 @@ export default function agentModesExtension(pi: ExtensionAPI): void {
 				`agent-modes: unknown mode '${name}' (have: ${Object.keys(config.modes).join(", ")})`,
 				"error",
 			);
-			return;
+			return Promise.resolve();
 		}
+
+		requestedMode = name;
+		const run = switchQueue.then(
+			() => applyMode(name, ctx, opts),
+			() => applyMode(name, ctx, opts),
+		);
+		// Returned already-caught: a caller that ignores the promise (every shortcut and
+		// command handler does) must not produce an unhandled rejection when a switch
+		// throws, and a thrown switch must not wedge every later one.
+		const settled = run.then(
+			() => clearRequested(name),
+			() => clearRequested(name),
+		);
+		switchQueue = settled;
+		return settled;
+	}
+
+	function clearRequested(name: string): void {
+		if (requestedMode === name) requestedMode = undefined;
+	}
+
+	async function applyMode(
+		name: string,
+		ctx: ExtensionContext,
+		opts?: { quiet?: boolean; from?: string },
+	): Promise<void> {
+		const mode = config.modes[name];
+		if (!mode) return;
 
 		// Capture the pre-mode tool set once, so build/yolo can restore it.
 		if (baseTools === undefined) baseTools = pi.getActiveTools();
 
+		// A switch performed by this process knows the mode it came from; a restore
+		// passed `opts.from` instead because this process never had one.
+		const currentBeforeRun = current;
+
+		// Captured before the switch so the notice can name the exact tools the
+		// model is losing, rather than re-deriving them from two profiles. `from`
+		// lets a caller (session_start restoring a session) name the mode the
+		// transcript last knew about, which this process never entered itself.
+		const previous = current ?? opts?.from;
+		const toolsBefore = pi.getActiveTools();
+		const toolsAfter = toolsFor(name, toolsBefore);
+		// Read before the model swap: the notice describes the moment of the switch, and
+		// a slow swap must not reclassify a mid-run switch as an idle one (or the other
+		// way round) by the time the notice is written.
+		const idleAtSwitch = ctx.isIdle();
+
 		current = name;
-		pi.setActiveTools(toolsFor(name, pi.getActiveTools()));
+		pi.setActiveTools(toolsAfter);
 		// Await the model swap BEFORE announcing, so the toast reports reality
 		// rather than the configured intent. See applyModel.
 		const applied = await applyModel(name, ctx);
 		updateStatus(ctx);
 		persist();
+
+		if (previous && previous !== name) {
+			announceSwitch({
+				from: previous,
+				to: name,
+				toolsBefore,
+				toolsAfter,
+				appliedModel: applied,
+				restored: Boolean(opts?.from) && !currentBeforeRun,
+				idle: idleAtSwitch,
+			});
+		}
 
 		if (!opts?.quiet) {
 			const modelNote = applied ? ` · model ${applied}` : " · model unchanged";
@@ -614,7 +838,10 @@ export default function agentModesExtension(pi: ExtensionAPI): void {
 	function cycle(ctx: ExtensionContext): void {
 		const order = config.order.filter((n) => config.modes[n]);
 		if (order.length === 0) return;
-		const idx = current ? order.indexOf(current) : -1;
+		// From the intended mode, not the applied one: a burst of presses must advance a
+		// step each, and the applied mode only moves once the queued switch runs.
+		const base = intendedMode();
+		const idx = base ? order.indexOf(base) : -1;
 		const next = order[(idx + 1) % order.length];
 		if (next) setMode(next, ctx);
 	}
@@ -665,7 +892,7 @@ export default function agentModesExtension(pi: ExtensionAPI): void {
 	pi.registerShortcut("ctrl+shift+m" as never, {
 		description: "Toggle oracle / build",
 		handler: async (ctx) => {
-			setMode(current === "oracle" ? "build" : "oracle", ctx);
+			setMode(intendedMode() === "oracle" ? "build" : "oracle", ctx);
 		},
 	});
 
@@ -715,30 +942,28 @@ export default function agentModesExtension(pi: ExtensionAPI): void {
 			// from a different context.
 			if (mode.writeScope !== undefined) {
 				if (mode.writeScope.length === 0) {
-					return {
-						block: true,
-						reason: `[${mode.label}] refused: write to '${raw || "(no path)"}' — this mode is read-only toward the repo. Switch modes to write.`,
-					};
+					return refuse(mode, `refused: write to '${raw || "(no path)"}' — this mode is read-only toward the repo.`);
 				}
 				if (!rel || !inScope(rel, mode.writeScope)) {
-					return {
-						block: true,
-						reason: `[${mode.label}] refused: write to '${rel ?? raw}' — this mode writes only ${mode.writeScope.join(", ")}.`,
-					};
+					return refuse(
+						mode,
+						`refused: write to '${rel ?? raw}' — this mode writes only ${mode.writeScope.join(", ")}.`,
+					);
 				}
 			}
 
 			// writeDeny wins over scope and over keepExtensions: the frozen test surface
 			// is not a place a build lane edits, whatever else it may touch.
 			if (mode.writeDeny?.length && rel && inScope(rel, mode.writeDeny)) {
-				return {
-					block: true,
-					reason:
-						`[${mode.label}] refused: write to '${rel}' — ` +
+				// Through refuse(), like every other guard: the escape hatch is the one thing
+				// a refusal must never be the only site to omit.
+				return refuse(
+					mode,
+					`refused: write to '${rel}' — ` +
 						(mode.writeDenyReason ??
 							`the frozen test surface is locked (${mode.writeDeny.join(", ")}). ` +
 								`A test changes only by a recorded amendment; a build lane never edits one.`),
-				};
+				);
 			}
 		}
 
@@ -746,18 +971,16 @@ export default function agentModesExtension(pi: ExtensionAPI): void {
 		if (mode.bash === "all") return;
 
 		if (mode.bash === "none") {
-			return {
-				block: true,
-				reason: `[${mode.label}] shell access is disabled in this mode. Switch modes (Tab) for shell access.`,
-			};
+			return refuse(mode, "shell access is disabled in this mode.");
 		}
 
 		const command = String((event.input as { command?: unknown }).command ?? "");
 		if (!isSafeCommand(command)) {
-			return {
-				block: true,
-				reason: `[${mode.label}] command blocked — not on the read-only allowlist. Switch modes (Tab) to run it.\nCommand: ${command}`,
-			};
+			return refuse(
+				mode,
+				"command blocked — not on the read-only allowlist of this mode.",
+				`Command: ${command}`,
+			);
 		}
 
 		// Allowed. Remember the tracked tree so tool_result can report drift the
@@ -795,27 +1018,24 @@ export default function agentModesExtension(pi: ExtensionAPI): void {
 	});
 
 	// --- prompt contract ----------------------------------------------------
+	// The contract ships as a TAGGED SECTION rather than a forced prompt, so a
+	// switch reaches the model as "the <agent-mode> section changed": pi diffs the
+	// sections it already sent against these, patches only the difference, and
+	// keeps its own tool-change declarations. Why that matters is in the README
+	// ("What the model is told when the mode changes") — one place, not three.
 	pi.on("before_agent_start", async (event) => {
 		if (!current) return;
 		const mode = config.modes[current];
 		if (!mode) return;
 
-		const prompt = prompts.get(current) ?? "";
-		if (!prompt) return;
-
-		const shell =
-			mode.bash === "none"
-				? "unavailable"
-				: mode.bash === "safe"
-					? "restricted to a read-only allowlist"
-					: "unrestricted";
-
-		return {
-			systemPrompt:
-				`${event.systemPrompt}\n\n---\n${prompt}\n\n` +
-				`Active tools right now: ${pi.getActiveTools().join(", ")}. ` +
-				`Shell: ${shell}.`,
-		};
+		const contract = modeContract(current, mode);
+		const options = event.systemPromptOptions as typeof event.systemPromptOptions | undefined;
+		if (!options?.sections) {
+			// pi before structured prompt options: appending is the only way to publish
+			// the contract, at the cost of the full-prompt replacement.
+			return { systemPrompt: `${event.systemPrompt}\n\n---\n${contract}` };
+		}
+		options.sections[SECTION_TAG] = contract;
 	});
 
 	// --- lifecycle ----------------------------------------------------------
@@ -846,7 +1066,20 @@ export default function agentModesExtension(pi: ExtensionAPI): void {
 			(config.default && config.modes[config.default] ? config.default : undefined);
 
 		if (target) {
-			setMode(target, ctx, { quiet: !requested });
+			// On a resume the transcript already holds the model's own claims about
+			// what it may do, and this process never entered the mode it was in — so
+			// hand `setMode` the persisted mode as the one to supersede. Silent when
+			// the mode is unchanged (the usual resume) and on a session with no
+			// conversation in it yet. Reads pi's own projection rather than guessing at
+			// entry shapes, and counts only words a user or the model actually said: this
+			// extension's own `custom` notices are not claims to supersede, so a session
+			// where the user only cycled modes announces nothing on resume.
+			const hasConversation = ctx.sessionManager
+				.buildSessionProjection()
+				.messages.some(
+						(message: { role: string }) => message.role === "user" || message.role === "assistant",
+				);
+			setMode(target, ctx, { quiet: !requested, from: hasConversation ? persisted : undefined });
 		} else {
 			updateStatus(ctx);
 		}

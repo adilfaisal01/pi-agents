@@ -15,7 +15,7 @@ modes/                  ← this package (the repo root manifest points here)
 ├── prompts/            one system-prompt contract per mode
 ├── tsconfig.json       typecheck only; pi loads the .ts itself
 ├── prepare-types.sh    links the pi release's types into node_modules
-├── selftest.mjs        52 assertions against the real extension, no pi needed
+├── selftest.mjs        assertions against the real extension, no pi needed
 └── check.sh            tsc + selftest
 ```
 
@@ -38,7 +38,7 @@ what you do in them.
 | mode | writes | shell | what it is for |
 | --- | --- | --- | --- |
 | `oracle` | nothing in the repo | read-only + execute-class | reading, audits, evidence — the default for a fresh session |
-| `plan` | `docs/**` and `ledger.md` only | read-only + execute-class | producing a written plan, not a conversation |
+| `plan` | `docs/**` only — the plan itself is the `todo` list | read-only + execute-class | producing a plan as dated todo items, not a prose answer |
 | `build` | source, never the test surface | unrestricted | implementing |
 | `yolo` | anything | unrestricted | experiments; not a delivery mode |
 | `forge` | anything but the machinery | unrestricted | autonomous task execution — claim, test-first, reviewed handoff |
@@ -48,6 +48,23 @@ oracle ↔ build. (Not `Tab` — that must stay autocomplete-accept.) Commands: 
 a menu, `/mode <name>` switches, `--agent-mode <name>` starts a session already in one.
 The mode persists per session and is restored on resume; a brand-new session enters
 `config.default`.
+
+## The plan is the todo list
+
+`plan` records a plan as `todo` items — one per step, subject dated (`YYYY-MM-DD · step`),
+`metadata.added` carrying the ISO timestamp, and the check each step must pass in its
+`description`. No `ledger.md`, no `plan.md`: an executing agent already reads the todo list,
+so a file copy is state that has to be reconciled, and the one state that is never stale is
+the list the agent is already looking at.
+
+`build` and `yolo` therefore close the ledger as they go: an item goes to
+`status: "completed"` in the same turn as the verification it names, with `metadata.done`
+set and `added` left alone. Batching closures to the end of a run turns the ledger back into
+a recollection, and a failed check keeps its item `in_progress` with the blocker added as a
+new item — writing the code is not completing the step.
+
+`todo` is listed in every mode's `tools`, so the ledger survives a switch: the list is one
+piece of state, not one per mode.
 
 ### `forge` — spec-first work, with the exception it needs
 
@@ -111,8 +128,40 @@ id is not available in your install, the switch is kept and a warning says where
 | write scope | `writeScope` / `writeDeny` on `write`/`edit` `input.path` | prompt injection naming a path |
 | shell policy | `bash: none\|safe\|all` + read-only allowlist | "just run the tests" in a read-only mode |
 | model per mode | `model` in the mode, applied on switch | forgetting to switch models too |
-| prompt contract | `prompts/<mode>.md` appended to the system prompt | (advisory; keep it aligned with the rest) |
+| prompt contract | `prompts/<mode>.md` in the `<agent-mode>` system-prompt section | (advisory; keep it aligned with the rest) |
+| switch notice | a `customType: "agent-modes"` message stating the new permissions and the tools gained/lost | (advisory; but a model that ignores it walks into a refusal) |
 | drift audit | tree snapshot around allowed `bash`, appended to the result | a command that quietly rewrites tracked files |
+
+## What the model is told when the mode changes
+
+A switch is enforced by the harness — the tool schema changes, the guards refuse — but an
+enforced switch is still an unexplained one unless the model is told. Two mechanisms carry that:
+
+1. **The prompt contract is a tagged section, not a rewritten prompt.** `prompts/<mode>.md` goes
+   into the `<agent-mode>` system-prompt section. Pi diffs the sections the model already has
+   against the ones requested and appends one system message patching only what changed — so a
+   switch reaches the model as "the `<agent-mode>` section and the tool list changed", its
+   cached prefix survives, and pi's own `toolsRemoved` declaration (`edit`, `write`) stays in the
+   transcript. Returning a whole `systemPrompt` instead would replace the prompt for the run:
+   a full cache miss on every switch, and every other system message dropped, `toolsRemoved`
+   included — the model would lose its write tools without being told.
+2. **The switch itself is a message.** Entering a mode writes one `customType: "agent-modes"`
+   entry stating the mode it came from and went to, the write and shell policy in that mode's
+   own words, the tools gained and lost, the model, and the fact that earlier statements about
+   its permissions are superseded. `steer` mid-run (the new tool set is already live, the
+   running prompt is not); a plain message when idle, which persists immediately and starts no
+   turn. A fresh session announces nothing — there is nothing to supersede. A **resume** that
+   lands in a different mode than the transcript last knew (a `--agent-mode` flag beating the
+   persisted mode) says so as `Mode restored:`, because that switch happened before this
+   process existed.
+
+Switches are also serialized: `pi.setModel` resolves only when a provider swap lands, and two
+keystrokes inside that window used to interleave two modes' tools, entries and model requests —
+the slower swap winning the model while the later switch owned the mode.
+
+Refusals name the way out the same way: they point at the real cycle key
+(`cycleKey`, or `/mode <name>`) rather than a key that does not exist, because the model can
+only ask the user to press it.
 
 ## config.json
 
@@ -128,7 +177,7 @@ Keys per mode:
 | `writeDenyReason` | the sentence shown when `writeDeny` refuses a write; defaults to the frozen-test-surface wording, so a mode whose deny list means something else (machinery, agent config) says what it actually protects |
 | `bash` | `none`, `safe` (read-only + execute-class allowlist), `all` |
 | `keepExtensions` | keep whatever tools were already active (extension tools included) |
-| `promptFile` | system-prompt contract appended for the mode |
+| `promptFile` | the mode's contract, published in the `<agent-mode>` system-prompt section |
 
 Top level: `provider` (optional), `default` (mode for a fresh session), `order` (cycle
 order), `cycleKey`.
@@ -142,7 +191,7 @@ cover `docs.md`; list exact filenames as exact filenames.
 ## Verify
 
 ```bash
-node selftest.mjs      # 52 assertions, no pi required
+node selftest.mjs      # the assertions, no pi required
 ./check.sh             # tsc + the selftest
 ```
 
@@ -164,3 +213,11 @@ precedence, and the drift audit end to end.
 - **A mode is not a sandbox.** It cannot stop a process the model starts from writing
   wherever that process has permission to write, and it does not confine the session to a
   directory. It is a capability profile for the tools pi itself mediates.
+- **A mid-run switch changes tools before it changes the prompt.** The active tool set is
+  applied per request, but a run's prompt options are fixed when it starts, so a switch in the
+  middle of a run reaches the model through the notice and the tool declarations, and its
+  `<agent-mode>` section only changes on the next turn. Providers that accept system messages
+  mid-conversation get the section patch in place; others get the replayed prompt, which is one
+  cache miss per switch.
+- **The notice is not free.** One short message per switch stays in the transcript for the rest
+  of the session, and is re-sent with it.
