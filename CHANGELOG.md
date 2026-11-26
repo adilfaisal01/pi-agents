@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.2] - 2026-11-26
+
+- **Distribution moved to a git tag.** `pi install git:github.com/adilfaisal01/pi-agents@vX.Y.Z`
+  replaces the registry: the 0.2.1 publish ran every check and then failed on `ENEEDAUTH`, so
+  npm has no trusted publisher that will accept this workflow, and a granular token is one more
+  credential to rotate. Tags pin a ref, `pi update --extensions` reconciles the checkout without
+  moving it, and the package manifest is untouched. `npm:@adilfaisal01/pi-agents` stays at 0.1.1
+  and `.github/workflows/publish.yml` is dispatch-only, so a tag no longer produces a red run.
+  `README.md` names the clone location (`~/.pi/agent/git/…`) and the fact that a git install puts
+  nothing on `PATH`, so `swarm-gate` and `review-lanes` are run from that checkout.
+
 ## [0.2.1] - 2026-11-26
 
 - **The forge suites no longer depend on the operator's machine.** `check-gate.sh` pinned its
