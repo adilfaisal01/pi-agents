@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.2.1] - 2026-11-26
+
+- **The forge suites no longer depend on the operator's machine.** `check-gate.sh` pinned its
+  fixture's initial branch to `main` (it had relied on `init.defaultBranch`), and
+  `check-role-models.sh` now honours `PI_MODEL_CHECK=skip`, so a publish runner whose `pi`
+  answers from a registry with no credentials behind it reports a skip instead of four
+  failures. Both were green locally and red in CI; the release for 0.2.0 stopped at its
+  `prepublishOnly` check and never reached the registry.
+
 ## [0.2.0] - 2026-11-26
 
 - **The plan is a todo list, and `build`/`yolo` close it as they go.** `plan` no longer writes a
