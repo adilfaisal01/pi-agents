@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.3] - 2026-11-26
 
 - **The remote is reachable from every mode, on terms each mode states.** All five modes now carry
   `mcp__github` in their tool set, and the safe shell allowlist accepts `gh`'s read subcommands
