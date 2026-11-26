@@ -48,7 +48,7 @@ frontmatter field that becomes `--model <provider>/<id>` on the child process.
 - Omit `model:` → the child inherits the dispatching session's model **and** thinking level.
   Explicit `model:` drops the inherited thinking level; that is intentional.
 - Discover the exact ids with `pi --list-models` — it fuzzy-matches, so a miss returns
-  lookalikes rather than nothing. Ids are provider-qualified: `ollama-cloud/mistral-large-4`.
+  lookalikes rather than nothing. Ids are provider-qualified: `ollama-cloud/glm-5.3-flash`.
 
 ## 3. Dispatch
 
@@ -180,7 +180,7 @@ before anything else ships. Then disagreements, anything under `NOT CHECKED`, an
 read.
 
 ```markdown
-**2 lanes · ollama-cloud/mimo-v2.6-flash (correctness) + ollama-cloud/mistral-large-4 (quality) · scope: `src/ctl/` · SEV1 ×1, SEV2 ×3, SEV3 ×2**
+**2 lanes · ollama-cloud/mimo-v2.6-flash (correctness) + ollama-cloud/glm-5.3-flash (quality) · scope: `src/ctl/` · SEV1 ×1, SEV2 ×3, SEV3 ×2**
 
 | # | SEV | LOCATION | FINDING | TRIGGER | LENS | CONF |
 |---|---|---|---|---|---|---|

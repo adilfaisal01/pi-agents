@@ -6,7 +6,7 @@ write_scope: review
 # The id below is an example from one setup. Replace it with a provider/id you have
 # (`pi --list-models`); scripts/install.sh check fails until it resolves. See README,
 # "Set the two models first".
-model: ollama-cloud/mistral-large-4
+model: ollama-cloud/glm-5.3-flash
 ---
 
 You are the **quality** lane of a two-lane code review. Another model reviews the same code
